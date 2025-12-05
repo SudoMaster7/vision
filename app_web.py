@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import os
+import datetime
 from flask import Flask, render_template, Response, jsonify
 
 app = Flask(__name__)
@@ -113,6 +114,9 @@ def detectar_expressao(face_landmarks):
 def gerar_frames():
     global cap, estado_atual
     
+    ultimo_print = 0
+    COOLDOWN_PRINT = 3.0 # 3 segundos de intervalo entre prints
+
     while True:
         if cap is None or not cap.isOpened():
             print("Tentando abrir a camera...")
@@ -213,6 +217,22 @@ def gerar_frames():
                     gesto_temp = "OK"
                     img_temp = "ok.jpg"
                     prioridade = 5
+
+                    # Funcionalidade: Print ao fazer OK com as Costas da Mão Direita
+                    if lateralidade == "Right" and orientacao == "Costas":
+                        agora = time.time() + 0.3 # pequeno ajuste de tempo
+                        if agora - ultimo_print > COOLDOWN_PRINT:
+                            if not os.path.exists("screenshots"):
+                                os.makedirs("screenshots")
+                            
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            filename = f"screenshots/print_{timestamp}.jpg"
+                            # Salvar o frame original (sem desenhos do mediapipe se possível, mas aqui 'frame' já tem desenhos)
+                            # Se quisesse limpo, teria que ter salvo uma cópia antes do mp_desenho.draw_landmarks
+                            # Mas o usuário pediu "print da camera", então com os desenhos é aceitável/esperado para debug visual.
+                            cv2.imwrite(filename, frame)
+                            print(f"📸 Screenshot salvo: {filename}")
+                            ultimo_print = agora
                 elif polegar_pra_cima and outros_dedos_fechados:
                     gesto_temp = "LIKE"
                     img_temp = "like.jpg"
@@ -279,6 +299,132 @@ def index():
 @app.route('/video_feed')
 def video_feed():
     return Response(gerar_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# --- Lógica de Pintura Virtual ---
+canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8)
+cor_pincel = (255, 0, 0) # Azul BGR (OpenCV usa BGR)
+ponto_anterior = (0, 0)
+
+def gerar_frames_pintura():
+    global cap, canvas_pintura, cor_pincel, ponto_anterior
+    
+    # Cores disponíveis (BGR)
+    cores = [
+        ((255, 0, 0), "Azul"),    # Azul
+        ((0, 255, 0), "Verde"),   # Verde
+        ((0, 0, 255), "Vermelho"),# Vermelho
+        ((0, 0, 0), "Borracha")   # Preto (Apagar)
+    ]
+    
+    # Áreas dos botões de cor (x, y, w, h)
+    botoes = []
+    largura_botao = 100
+    for i in range(len(cores)):
+        botoes.append( (40 + i * 120, 20, largura_botao, 60) )
+
+    while True:
+        if cap is None or not cap.isOpened():
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(0)
+            time.sleep(1)
+            
+        sucesso, frame = cap.read()
+        if not sucesso:
+            # Frame de erro para não travar o vídeo
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(frame, "ERRO NA CAMERA", (150, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.5)
+            continue
+
+        frame = cv2.flip(frame, 1)
+        # Forçar tamanho 640x480 para bater com o canvas
+        frame = cv2.resize(frame, (640, 480))
+        
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resultados = maos.process(frame_rgb)
+        
+        # Desenhar interface (botões)
+        for i, (cor, nome) in enumerate(cores):
+            x, y, w, h = botoes[i]
+            cv2.rectangle(frame, (x, y), (x+w, y+h), cor, -1)
+            cv2.putText(frame, nome, (x+10, y+40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            # Borda branca no botão selecionado
+            if cor == cor_pincel:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 255), 3)
+
+        if resultados.multi_hand_landmarks:
+            for hand_landmarks in resultados.multi_hand_landmarks:
+                # Pontos importantes
+                # 8: Ponta do indicador
+                # 12: Ponta do médio (para verificar se está levantado ou não)
+                
+                x8, y8 = int(hand_landmarks.landmark[8].x * 640), int(hand_landmarks.landmark[8].y * 480)
+                
+                # Verificar se indicador está levantado (y da ponta < y da articulação média)
+                indicador_levantado = hand_landmarks.landmark[8].y < hand_landmarks.landmark[6].y
+                
+                # Verificar se é mão aberta (para limpar tela)
+                # Contagem rápida de dedos levantados
+                dedos_up = 0
+                if hand_landmarks.landmark[8].y < hand_landmarks.landmark[6].y: dedos_up += 1
+                if hand_landmarks.landmark[12].y < hand_landmarks.landmark[10].y: dedos_up += 1
+                if hand_landmarks.landmark[16].y < hand_landmarks.landmark[14].y: dedos_up += 1
+                if hand_landmarks.landmark[20].y < hand_landmarks.landmark[18].y: dedos_up += 1
+                
+                if dedos_up >= 4: # Mão aberta -> Limpar
+                    canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(frame, "TELA LIMPA", (250, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    ponto_anterior = (0, 0)
+                
+                elif indicador_levantado:
+                    # Desenhar círculo na ponta do dedo com a cor atual
+                    cv2.circle(frame, (x8, y8), 10, cor_pincel, -1)
+                    
+                    # Verificar colisão com botões (Seleção de Cor)
+                    if y8 < 100: # Se estiver no topo da tela
+                        for i, (x, y, w, h) in enumerate(botoes):
+                            if x < x8 < x+w and y < y8 < y+h:
+                                cor_pincel = cores[i][0]
+                                ponto_anterior = (0, 0) # Resetar traço para não riscar ao selecionar
+                    
+                    # Desenhar no canvas
+                    else:
+                        if ponto_anterior == (0, 0):
+                            ponto_anterior = (x8, y8)
+                        
+                        # Desenhar linha
+                        cv2.line(canvas_pintura, ponto_anterior, (x8, y8), cor_pincel, 5)
+                        ponto_anterior = (x8, y8)
+                else:
+                    ponto_anterior = (0, 0)
+
+        # Mesclar canvas com frame
+        # Criar máscara onde há desenho
+        img_gray = cv2.cvtColor(canvas_pintura, cv2.COLOR_BGR2GRAY)
+        _, img_inv = cv2.threshold(img_gray, 10, 255, cv2.THRESH_BINARY_INV)
+        img_inv = cv2.cvtColor(img_inv, cv2.COLOR_GRAY2BGR)
+        
+        # Onde tem desenho no canvas, usamos o canvas. Onde não tem, usamos o frame.
+        frame = cv2.bitwise_and(frame, img_inv)
+        frame = cv2.bitwise_or(frame, canvas_pintura)
+
+        ret, buffer = cv2.imencode('.jpg', frame)
+        frame_bytes = buffer.tobytes()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.route('/pintura')
+def pintura():
+    return render_template('pintura.html')
+
+@app.route('/video_feed_pintura')
+def video_feed_pintura():
+    return Response(gerar_frames_pintura(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/current_status')
 def current_status():
