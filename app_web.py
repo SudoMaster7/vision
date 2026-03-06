@@ -13,6 +13,7 @@ try:
 except Exception:
     np = None
 import os
+import json
 import datetime
 try:
     import sounddevice as sd
@@ -21,6 +22,7 @@ except Exception:
 import time
 import threading
 from flask import Flask, render_template, Response, jsonify, request, redirect, url_for
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 CLOUD_MODE = os.getenv("VERCEL") == "1" and bool(os.getenv("VERCEL_URL"))
@@ -110,6 +112,43 @@ config_dispositivos = {
     "camera_index": 0,
     "microfone_index": None
 }
+
+# --- Mapeamento Gesto → Imagem (configurável) ---
+GESTURE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gesture_config.json")
+
+MAPEAMENTO_PADRAO = {
+    "OK": "ok.jpg",
+    "LIKE": "like.jpg",
+    "Paz e Amor": "paz.jpg",
+    "Rock": "like.jpg",
+    "Apontando": "neutro.jpg",
+    "Mao Aberta": "sol.jpg",
+    "Punho Fechado": "lua.jpg",
+    "Sorriso": "sorriso.jpg",
+    "Surpresa": "surpresa.jpg",
+    "Neutro": "neutro.jpg"
+}
+
+def _carregar_mapeamento():
+    """Carrega mapeamento de gesture_config.json ou retorna padrão."""
+    if os.path.exists(GESTURE_CONFIG_FILE):
+        try:
+            with open(GESTURE_CONFIG_FILE, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+            # Mesclar com padrão para garantir todas as chaves
+            resultado = dict(MAPEAMENTO_PADRAO)
+            resultado.update(dados)
+            return resultado
+        except Exception:
+            pass
+    return dict(MAPEAMENTO_PADRAO)
+
+def _salvar_mapeamento(mapeamento):
+    """Salva mapeamento em gesture_config.json."""
+    with open(GESTURE_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(mapeamento, f, ensure_ascii=False, indent=2)
+
+mapeamento_gestos = _carregar_mapeamento()
 
 cap = None
 
@@ -334,9 +373,9 @@ def detectar_expressao(face_landmarks):
     largura_boca = (p[291].x - p[61].x) / largura_rosto
     
     if abertura_boca > 0.15: 
-        return "Surpresa", "surpresa.jpg"
+        return "Surpresa", mapeamento_gestos.get("Surpresa", "surpresa.jpg")
     elif largura_boca > 0.40: # Ajustado: > 40% da largura do rosto
-        return "Sorriso", "sorriso.jpg"
+        return "Sorriso", mapeamento_gestos.get("Sorriso", "sorriso.jpg")
     
     return "Neutro", None
 
@@ -485,7 +524,7 @@ def gerar_frames():
                 if distancia_ok < (0.18 * escala_mao) and (lista_dedos[2] == 1 or lista_dedos[3] == 1):
                     # OK: polegar e indicador formam círculo
                     gesto_temp = "OK"
-                    img_temp = "ok.jpg"
+                    img_temp = mapeamento_gestos.get("OK", "ok.jpg")
                     prioridade = 6
 
                     # Funcionalidade: Print ao fazer OK com as Costas da Mão Direita
@@ -504,37 +543,37 @@ def gerar_frames():
                 elif polegar_pra_cima and outros_dedos_fechados:
                     # LIKE: polegar para cima, outros fechados
                     gesto_temp = "LIKE"
-                    img_temp = "like.jpg"
+                    img_temp = mapeamento_gestos.get("LIKE", "like.jpg")
                     prioridade = 5
 
                 elif total_dedos == 2 and indicador_levantado and medio_levantado and not anelar_levantado and not minimo_levantado:
                     # Paz e Amor: indicador + médio levantados
                     gesto_temp = "Paz e Amor"
-                    img_temp = "paz.jpg"
+                    img_temp = mapeamento_gestos.get("Paz e Amor", "paz.jpg")
                     prioridade = 4
 
                 elif indicador_levantado and minimo_levantado and not medio_levantado and not anelar_levantado:
                     # Rock: indicador + mindinho levantados
                     gesto_temp = "Rock"
-                    img_temp = "like.jpg"
+                    img_temp = mapeamento_gestos.get("Rock", "like.jpg")
                     prioridade = 4
 
                 elif total_dedos == 1 and indicador_levantado:
                     # Apontar: só indicador levantado
                     gesto_temp = "Apontando"
-                    img_temp = "neutro.jpg"
+                    img_temp = mapeamento_gestos.get("Apontando", "neutro.jpg")
                     prioridade = 2
 
                 elif total_dedos == 5:
                     # Mão Aberta: todos os dedos levantados
                     gesto_temp = "Mao Aberta"
-                    img_temp = "sol.jpg"
+                    img_temp = mapeamento_gestos.get("Mao Aberta", "sol.jpg")
                     prioridade = 3
 
                 elif outros_dedos_fechados and not polegar_pra_cima:
                     # Punho Fechado: todos os dedos fechados (sem polegar pra cima)
                     gesto_temp = "Punho Fechado"
-                    img_temp = "lua.jpg"
+                    img_temp = mapeamento_gestos.get("Punho Fechado", "lua.jpg")
                     prioridade = 1
                 
                 gestos_lista.append(f"{lateralidade} ({orientacao}): {gesto_temp}")
@@ -796,6 +835,87 @@ def set_devices():
             "microfone_index": config_dispositivos["microfone_index"]
         }
     })
+
+# --- API de Mapeamento Gesto → Imagem ---
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "images")
+
+def _extensao_permitida(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/list_images')
+def list_images():
+    """Retorna lista de todas as imagens disponíveis em static/images/."""
+    imagens = []
+    if os.path.isdir(IMAGES_DIR):
+        for f in sorted(os.listdir(IMAGES_DIR)):
+            if _extensao_permitida(f):
+                imagens.append(f)
+    return jsonify({"imagens": imagens})
+
+@app.route('/gesture_images')
+def get_gesture_images():
+    """Retorna mapeamento atual gesto→imagem + lista de imagens disponíveis."""
+    imagens = []
+    if os.path.isdir(IMAGES_DIR):
+        for f in sorted(os.listdir(IMAGES_DIR)):
+            if _extensao_permitida(f):
+                imagens.append(f)
+    return jsonify({
+        "mapeamento": dict(mapeamento_gestos),
+        "imagens_disponiveis": imagens,
+        "gestos": list(MAPEAMENTO_PADRAO.keys())
+    })
+
+@app.route('/gesture_images', methods=['POST'])
+def set_gesture_images():
+    """Atualiza mapeamento gesto→imagem."""
+    global mapeamento_gestos
+    dados = request.get_json(silent=True) or {}
+    novo_mapeamento = dados.get("mapeamento")
+    if not novo_mapeamento or not isinstance(novo_mapeamento, dict):
+        return jsonify({"ok": False, "mensagem": "Dados inválidos."}), 400
+
+    # Validar que todas as imagens existem
+    for gesto, imagem in novo_mapeamento.items():
+        if gesto not in MAPEAMENTO_PADRAO:
+            continue  # Ignorar gestos desconhecidos
+        caminho = os.path.join(IMAGES_DIR, imagem)
+        if not os.path.isfile(caminho):
+            return jsonify({"ok": False, "mensagem": f"Imagem '{imagem}' não encontrada."}), 400
+
+    # Atualizar apenas gestos válidos
+    for gesto in MAPEAMENTO_PADRAO:
+        if gesto in novo_mapeamento:
+            mapeamento_gestos[gesto] = novo_mapeamento[gesto]
+
+    _salvar_mapeamento(mapeamento_gestos)
+    return jsonify({"ok": True, "mensagem": "Mapeamento salvo com sucesso.", "mapeamento": dict(mapeamento_gestos)})
+
+@app.route('/upload_image', methods=['POST'])
+def upload_image():
+    """Upload de nova imagem para static/images/."""
+    if 'imagem' not in request.files:
+        return jsonify({"ok": False, "mensagem": "Nenhum arquivo enviado."}), 400
+
+    arquivo = request.files['imagem']
+    if arquivo.filename == '':
+        return jsonify({"ok": False, "mensagem": "Nome de arquivo vazio."}), 400
+
+    if not _extensao_permitida(arquivo.filename):
+        return jsonify({"ok": False, "mensagem": f"Extensão não permitida. Use: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+
+    nome_seguro = secure_filename(arquivo.filename)
+    if not nome_seguro:
+        return jsonify({"ok": False, "mensagem": "Nome de arquivo inválido."}), 400
+
+    # Garantir que o diretório existe
+    os.makedirs(IMAGES_DIR, exist_ok=True)
+
+    caminho_destino = os.path.join(IMAGES_DIR, nome_seguro)
+    arquivo.save(caminho_destino)
+    return jsonify({"ok": True, "mensagem": f"Imagem '{nome_seguro}' enviada com sucesso.", "filename": nome_seguro})
 
 if __name__ == "__main__":
     # Host 0.0.0.0 permite acesso de outros dispositivos na rede
