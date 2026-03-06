@@ -279,8 +279,12 @@
         let statusPollingStarted = false;
         let cloudGestureModeStarted = false;
         let localBrowserStream = null;
+        let localBrowserAudioStream = null;
         let cloudHands = null;
+        let cloudFaceMesh = null;
         let cloudCamera = null;
+        let cloudHandState = { gesto: 'Nenhuma mao', imagem: 'neutro.jpg', prioridade: -1 };
+        let cloudExpressionState = { expressao: 'Neutro', imagem: null };
 
         function setConnection(ok) {
             if (ok) {
@@ -353,14 +357,15 @@
         }
 
         async function garantirBibliotecasCloud() {
-            if (window.Hands && window.Camera) {
+            if (window.Hands && window.Camera && window.FaceMesh) {
                 return true;
             }
 
             try {
                 await carregarScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
                 await carregarScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js');
-                return !!(window.Hands && window.Camera);
+                await carregarScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
+                return !!(window.Hands && window.Camera && window.FaceMesh);
             } catch (_) {
                 return false;
             }
@@ -426,7 +431,49 @@
             return false;
         }
 
-        function carregarDispositivos() {
+        async function listarDispositivosBrowser() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                return { cameras: [], microfones: [] };
+            }
+
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const cameras = devices
+                .filter(item => item.kind === 'videoinput')
+                .map((item, index) => ({
+                    index: item.deviceId,
+                    nome: item.label || `Câmera ${index + 1}`
+                }));
+
+            const microfones = devices
+                .filter(item => item.kind === 'audioinput')
+                .map((item, index) => ({
+                    index: item.deviceId,
+                    nome: item.label || `Microfone ${index + 1}`
+                }));
+
+            return { cameras, microfones };
+        }
+
+        async function iniciarAudioNavegador(deviceId = null) {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                return false;
+            }
+
+            try {
+                if (localBrowserAudioStream) {
+                    localBrowserAudioStream.getTracks().forEach(track => track.stop());
+                    localBrowserAudioStream = null;
+                }
+
+                const audioConstraints = deviceId ? { deviceId: { exact: deviceId } } : true;
+                localBrowserAudioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: audioConstraints });
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        async function carregarDispositivos() {
             fetch('/devices')
                 .then(response => {
                     if (!response.ok) {
@@ -441,12 +488,26 @@
                     preencherSelect(microfoneSelect, data.microfones, data.selecionado?.microfone_index, 'Nenhum microfone');
 
                     if (cloudMode) {
-                        cameraSelect.disabled = true;
-                        microfoneSelect.disabled = true;
-                        saveDevicesBtn.disabled = true;
-                        devicesMessage.className = 'text-warning';
-                        devicesMessage.textContent = 'Deploy cloud: usando câmera/mic do navegador.';
-                        iniciarModoCloudGestos();
+                        const salvoCloud = carregarDispositivosSalvos() || {};
+                        listarDispositivosBrowser()
+                            .then(async (browserDevices) => {
+                                preencherSelect(cameraSelect, browserDevices.cameras, salvoCloud.camera_index, 'Nenhuma câmera');
+                                preencherSelect(microfoneSelect, browserDevices.microfones, salvoCloud.microfone_index, 'Nenhum microfone');
+
+                                cameraSelect.disabled = false;
+                                microfoneSelect.disabled = false;
+                                saveDevicesBtn.disabled = false;
+
+                                devicesMessage.className = 'text-warning';
+                                devicesMessage.textContent = 'Deploy cloud: dispositivos locais via navegador.';
+
+                                await iniciarModoCloudGestos();
+                                await iniciarAudioNavegador(microfoneSelect.value || null);
+                            })
+                            .catch(() => {
+                                devicesMessage.className = 'text-danger';
+                                devicesMessage.textContent = 'Falha ao listar dispositivos do navegador.';
+                            });
                         return;
                     }
 
@@ -474,7 +535,7 @@
                 });
         }
 
-        async function iniciarCameraNavegador() {
+        async function iniciarCameraNavegador(deviceId = null) {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 devicesMessage.className = 'text-danger';
                 devicesMessage.textContent = 'Navegador não suporta acesso à câmera local.';
@@ -482,9 +543,13 @@
             }
 
             try {
-                if (!localBrowserStream) {
-                    localBrowserStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                if (localBrowserStream) {
+                    localBrowserStream.getTracks().forEach(track => track.stop());
+                    localBrowserStream = null;
                 }
+
+                const videoConstraints = deviceId ? { deviceId: { exact: deviceId } } : true;
+                localBrowserStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
                 localCameraPreview.srcObject = localBrowserStream;
                 localCameraPreview.style.display = 'block';
                 serverVideoFeed.style.display = 'none';
@@ -513,21 +578,34 @@
             };
         }
 
-        function atualizarRespostaCloud(gesto, imagem) {
-            gestureMainElement.innerText = gesto;
-            expressionElement.innerText = 'Neutro';
-            gestureFullElement.innerText = `Cloud (Navegador): ${gesto}`;
+        function aplicarEstadoCloud() {
+            const gestoAtual = cloudHandState.gesto || 'Nenhuma mao';
+            const expressaoAtual = cloudExpressionState.expressao || 'Neutro';
 
-            const newSrc = `/static/images/${imagem}?t=${Date.now()}`;
+            let imagemFinal = cloudHandState.imagem || 'neutro.jpg';
+
+            if (
+                cloudExpressionState.imagem &&
+                (gestoAtual === 'Nenhuma mao' || gestoAtual === 'Punho Fechado' || gestoAtual === 'Mao Aberta')
+            ) {
+                imagemFinal = cloudExpressionState.imagem;
+            }
+
+            gestureMainElement.innerText = gestoAtual;
+            expressionElement.innerText = expressaoAtual;
+            gestureFullElement.innerText = `Cloud (Navegador): ${gestoAtual} | ${expressaoAtual}`;
+
+            const newSrc = `/static/images/${imagemFinal}?t=${Date.now()}`;
             const currentSrcBase = imgElement.src.split('?')[0];
-            if (!currentSrcBase.endsWith(imagem) || imgElement.naturalWidth === 0) {
+            if (!currentSrcBase.endsWith(imagemFinal) || imgElement.naturalWidth === 0) {
                 imgElement.src = newSrc;
             }
         }
 
         function processarCloudGestos(results) {
             if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                atualizarRespostaCloud('Nenhuma mao', 'neutro.jpg');
+                cloudHandState = { gesto: 'Nenhuma mao', imagem: 'neutro.jpg', prioridade: -1 };
+                aplicarEstadoCloud();
                 return;
             }
 
@@ -548,31 +626,69 @@
             const outrosDedosFechados = indicadorFechado && medioFechado && anelarFechado && minimoFechado;
 
             if (distanciaOk < 0.05 && lista[2] === 1 && lista[3] === 1) {
-                atualizarRespostaCloud('OK', 'ok.jpg');
+                cloudHandState = { gesto: 'OK', imagem: 'ok.jpg', prioridade: 5 };
+                aplicarEstadoCloud();
                 return;
             }
 
             if (polegarPraCima && outrosDedosFechados) {
-                atualizarRespostaCloud('LIKE', 'like.jpg');
+                cloudHandState = { gesto: 'LIKE', imagem: 'like.jpg', prioridade: 4 };
+                aplicarEstadoCloud();
                 return;
             }
 
             if (total === 5) {
-                atualizarRespostaCloud('Mao Aberta', 'sol.jpg');
+                cloudHandState = { gesto: 'Mao Aberta', imagem: 'sol.jpg', prioridade: 2 };
+                aplicarEstadoCloud();
                 return;
             }
 
             if (total === 0) {
-                atualizarRespostaCloud('Punho Fechado', 'lua.jpg');
+                cloudHandState = { gesto: 'Punho Fechado', imagem: 'lua.jpg', prioridade: 1 };
+                aplicarEstadoCloud();
                 return;
             }
 
             if (total === 2 && lista[1] === 1 && lista[2] === 1) {
-                atualizarRespostaCloud('Paz e Amor', 'paz.jpg');
+                cloudHandState = { gesto: 'Paz e Amor', imagem: 'paz.jpg', prioridade: 3 };
+                aplicarEstadoCloud();
                 return;
             }
 
-            atualizarRespostaCloud(`Dedos: ${total}`, 'neutro.jpg');
+            cloudHandState = { gesto: `Dedos: ${total}`, imagem: 'neutro.jpg', prioridade: 0 };
+            aplicarEstadoCloud();
+        }
+
+        function processarCloudRosto(results) {
+            if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+                cloudExpressionState = { expressao: 'Neutro', imagem: null };
+                aplicarEstadoCloud();
+                return;
+            }
+
+            const p = results.multiFaceLandmarks[0];
+
+            const alturaRosto = p[152].y - p[10].y;
+            const larguraRosto = p[454].x - p[234].x;
+
+            if (alturaRosto <= 0 || larguraRosto <= 0) {
+                cloudExpressionState = { expressao: 'Neutro', imagem: null };
+                aplicarEstadoCloud();
+                return;
+            }
+
+            const aberturaBoca = (p[14].y - p[13].y) / alturaRosto;
+            const larguraBoca = (p[291].x - p[61].x) / larguraRosto;
+
+            if (aberturaBoca > 0.15) {
+                cloudExpressionState = { expressao: 'Surpresa', imagem: 'surpresa.jpg' };
+            } else if (larguraBoca > 0.40) {
+                cloudExpressionState = { expressao: 'Sorriso', imagem: 'sorriso.jpg' };
+            } else {
+                cloudExpressionState = { expressao: 'Neutro', imagem: null };
+            }
+
+            aplicarEstadoCloud();
         }
 
         async function iniciarModoCloudGestos() {
@@ -587,12 +703,12 @@
                 return;
             }
 
-            const cameraOk = await iniciarCameraNavegador();
+            const cameraOk = await iniciarCameraNavegador(cameraSelect.value || null);
             if (!cameraOk) {
                 return;
             }
 
-            if (!window.Hands || !window.Camera) {
+            if (!window.Hands || !window.Camera || !window.FaceMesh) {
                 devicesMessage.className = 'text-danger';
                 devicesMessage.textContent = 'Biblioteca de gestos não carregou no navegador.';
                 return;
@@ -611,10 +727,26 @@
 
             cloudHands.onResults(processarCloudGestos);
 
+            cloudFaceMesh = new window.FaceMesh({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+            });
+
+            cloudFaceMesh.setOptions({
+                maxNumFaces: 1,
+                refineLandmarks: true,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            cloudFaceMesh.onResults(processarCloudRosto);
+
             cloudCamera = new window.Camera(localCameraPreview, {
                 onFrame: async () => {
                     if (cloudHands) {
                         await cloudHands.send({ image: localCameraPreview });
+                    }
+                    if (cloudFaceMesh) {
+                        await cloudFaceMesh.send({ image: localCameraPreview });
                     }
                 },
                 width: 640,
@@ -632,6 +764,42 @@
                 camera_index: cameraSelect.value === '' ? null : Number(cameraSelect.value),
                 microfone_index: microfoneSelect.value === '' ? null : Number(microfoneSelect.value)
             };
+
+            if (cloudMode) {
+                const payloadCloud = {
+                    camera_index: cameraSelect.value || null,
+                    microfone_index: microfoneSelect.value || null
+                };
+
+                if (!modoSilencioso) {
+                    devicesMessage.className = 'text-warning';
+                    devicesMessage.textContent = 'Aplicando configuração local do navegador...';
+                }
+
+                Promise.all([
+                    iniciarCameraNavegador(payloadCloud.camera_index),
+                    iniciarAudioNavegador(payloadCloud.microfone_index)
+                ])
+                    .then(([cameraOk]) => {
+                        if (!cameraOk) {
+                            throw new Error('Não foi possível abrir a câmera selecionada.');
+                        }
+
+                        cloudGestureModeStarted = false;
+                        return iniciarModoCloudGestos();
+                    })
+                    .then(() => {
+                        salvarDispositivosLocal(payloadCloud);
+                        devicesMessage.className = 'text-success';
+                        devicesMessage.textContent = 'Dispositivos locais aplicados.';
+                    })
+                    .catch((error) => {
+                        devicesMessage.className = 'text-danger';
+                        devicesMessage.textContent = error.message || 'Falha ao aplicar dispositivos locais.';
+                    });
+
+                return;
+            }
 
             if (!modoSilencioso) {
                 devicesMessage.className = 'text-warning';
@@ -740,8 +908,12 @@
                 }
             };
 
-            speechRecognition.onerror = () => {
-                atualizarStatusLegenda('Falha no reconhecimento', 'text-danger');
+            speechRecognition.onerror = (event) => {
+                const motivo = event?.error || 'desconhecido';
+                atualizarStatusLegenda(`Falha: ${motivo}`, 'text-danger');
+                if (motivo === 'not-allowed') {
+                    speechCaption.innerText = 'Permita o microfone no navegador para usar a legenda.';
+                }
             };
 
             speechRecognition.onend = () => {
