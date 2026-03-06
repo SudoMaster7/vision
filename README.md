@@ -40,24 +40,88 @@ Utilizando a malha facial (Face Mesh), o sistema detecta:
     *   Python 3.11 instalado (Recomendado devido a compatibilidade do MediaPipe).
     *   Webcam conectada.
 
-2.  **Instale as dependências:**
+    > Em máquinas Windows com pasta do projeto em caminho com acentos (ex.: `Área de Trabalho`), o MediaPipe pode falhar ao carregar arquivos internos. Nesse caso, crie o ambiente virtual em um caminho sem acentos (ex.: `C:/venvs/visionsudo311`).
+
+2.  **Crie e ative um ambiente virtual (recomendado):**
     ```bash
-    pip install opencv-python mediapipe flask numpy
+    # Windows (PowerShell)
+    python -m venv .venv
+    .\.venv\Scripts\Activate.ps1
     ```
 
-3.  **Gere as imagens de feedback (Opcional):**
+    > Se seu projeto estiver em caminho com acento e o MediaPipe falhar, crie o venv fora dessa pasta (ex.: `C:/venvs/visionsudo311`) e use esse Python para executar.
+
+3.  **Instale as dependências:**
+    ```bash
+    pip install "mediapipe==0.10.21" flask pillow
+    ```
+
+4.  **Gere as imagens de feedback (Opcional):**
     Caso as imagens não existam na pasta `static/images`, execute:
     ```bash
     python gerar_novas_imagens.py
     ```
 
-4.  **Execute a aplicação:**
+5.  **Execute a aplicação web:**
+    ```bash
+    # Recomendado (Windows com caminho sem acento)
+    C:/venvs/visionsudo311/Scripts/python.exe app_web.py
+    ```
+
+    Alternativa (se seu `.venv` local não apresentar erro de MediaPipe):
     ```bash
     python app_web.py
     ```
 
-5.  **Acesse no navegador:**
+6.  **Acesse no navegador:**
     Abra `http://127.0.0.1:5000` no seu navegador web.
+
+7.  **Escolha câmera e microfone na interface:**
+    * No painel principal, use a seção **Configuração de Dispositivos**.
+    * Selecione a câmera e o microfone desejados.
+    * Clique em **Salvar dispositivos** para aplicar.
+    * A seleção fica salva no navegador e é reaplicada automaticamente ao abrir novamente a página.
+
+8.  **Ative legenda de voz (pt-BR):**
+    * Abaixo do vídeo da câmera, clique em **Iniciar legenda**.
+    * Permita o uso do microfone no navegador.
+    * A transcrição em português (Brasil) aparecerá em tempo real no campo de legenda.
+    * O painel mantém um histórico curto das últimas frases com horário.
+
+## 🖥️ Execução da versão GUI (Tkinter)
+
+Se quiser usar a interface desktop:
+
+```bash
+python app_gui.py
+```
+
+Na GUI, você também pode trocar a fonte de vídeo pelos botões de câmera.
+
+## ☁️ Deploy na Vercel (hoje)
+
+Arquivos de deploy já incluídos:
+* `requirements.txt`
+* `vercel.json`
+
+Passos:
+1. Faça push do projeto para o GitHub.
+2. Na Vercel, importe o repositório.
+3. Root Directory: `vision`.
+4. Deploy.
+
+### Observação importante sobre câmera/microfone
+Em deploy cloud (Vercel), o servidor **não tem acesso à sua câmera física local**.
+Por isso:
+* a interface web sobe normalmente;
+* o feed usa fallback de imagem;
+* seleção de câmera/microfone fica desabilitada no modo cloud.
+
+Para usar câmera real, continue rodando localmente com:
+
+```bash
+C:/venvs/visionsudo311/Scripts/python.exe app_web.py
+```
 
 ## 📂 Estrutura do Projeto
 

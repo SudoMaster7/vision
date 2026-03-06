@@ -74,6 +74,9 @@ class AppGestos:
             self.img_lua = np.zeros((480, 640, 3), dtype=np.uint8)
             self.img_lua[:] = (50, 50, 50) # Cinza
             self.img_neutro = np.zeros((480, 640, 3), dtype=np.uint8)
+            self.img_ok = np.zeros((480, 640, 3), dtype=np.uint8)
+            self.img_like = np.zeros((480, 640, 3), dtype=np.uint8)
+            self.img_paz = np.zeros((480, 640, 3), dtype=np.uint8)
 
         else:
             self.img_sol = cv2.imread(os.path.join(caminho_imagens, "sol.jpg"))

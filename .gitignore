@@ -2,15 +2,23 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+
+# Runtime artifacts
+screenshots/
+*.log
 
 # Virtual Environment
 .venv_311/
+.venv/
 venv/
 env/
 
 # VS Code
 .vscode/
+.idea/
 
 # OS generated files
 Thumbs.db
 Desktop.ini
+.DS_Store

@@ -1,43 +1,179 @@
-import cv2
-import mediapipe as mp
-import numpy as np
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+try:
+    import mediapipe as mp
+except Exception:
+    mp = None
+
+try:
+    import numpy as np
+except Exception:
+    np = None
 import os
 import datetime
-from flask import Flask, render_template, Response, jsonify
+try:
+    import sounddevice as sd
+except Exception:
+    sd = None
+from flask import Flask, render_template, Response, jsonify, request, redirect, url_for
 
 app = Flask(__name__)
+CLOUD_MODE = os.getenv("VERCEL") == "1"
+CV_AVAILABLE = cv2 is not None and mp is not None and np is not None
 
 # --- Configurações MediaPipe ---
-mp_maos = mp.solutions.hands
-mp_rosto = mp.solutions.face_mesh
-mp_desenho = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
+mp_maos = mp.solutions.hands if mp is not None else None
+mp_rosto = mp.solutions.face_mesh if mp is not None else None
+mp_desenho = mp.solutions.drawing_utils if mp is not None else None
+mp_drawing_styles = mp.solutions.drawing_styles if mp is not None else None
 
-# Inicializar Mãos
-maos = mp_maos.Hands(
-    static_image_mode=False, 
-    max_num_hands=2, 
-    model_complexity=0, 
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+def inicializar_mediapipe():
+    if not CV_AVAILABLE or CLOUD_MODE:
+        return None, None
 
-# Inicializar Rosto (Face Mesh)
-rosto = mp_rosto.FaceMesh(
-    max_num_faces=1,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+    try:
+        maos_local = mp_maos.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            model_complexity=0,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+
+        rosto_local = mp_rosto.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+
+        return maos_local, rosto_local
+    except FileNotFoundError as erro:
+        mensagem = (
+            "\n[ERRO] Falha ao iniciar MediaPipe.\n"
+            "No Windows, isso normalmente acontece quando o ambiente virtual está em caminho com acento (ex.: 'Área de Trabalho').\n"
+            "Solução recomendada:\n"
+            "1) Criar venv em caminho sem acentos, por exemplo: C:/venvs/visionsudo311\n"
+            "2) Instalar dependências nele\n"
+            "3) Rodar com: C:/venvs/visionsudo311/Scripts/python.exe app_web.py\n"
+        )
+        raise RuntimeError(mensagem) from erro
+
+
+maos, rosto = inicializar_mediapipe()
 
 # Estado Global
 estado_atual = {
     "gesto": "Nenhum",
+    "gesto_principal": "Nenhuma mao",
     "expressao": "Neutro",
     "imagem": "neutro.jpg"
 }
 
-cap = cv2.VideoCapture(0)
+config_dispositivos = {
+    "camera_index": 0,
+    "microfone_index": None
+}
+
+cap = None
+
+def listar_cameras(max_tentativas=6):
+    if cv2 is None or CLOUD_MODE:
+        return []
+
+    cameras = []
+    for idx in range(max_tentativas):
+        tentativa = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        if not tentativa.isOpened():
+            tentativa = cv2.VideoCapture(idx)
+
+        if tentativa.isOpened():
+            cameras.append({"index": idx, "nome": f"Câmera {idx}"})
+            tentativa.release()
+
+    if not cameras:
+        cameras.append({"index": 0, "nome": "Câmera 0 (padrão)"})
+
+    return cameras
+
+def _tentar_abrir_camera_por_indice(index):
+    if cv2 is None or CLOUD_MODE:
+        return None
+
+    if index is None:
+        return None
+
+    tentativa = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    if not tentativa.isOpened():
+        tentativa.release()
+        tentativa = cv2.VideoCapture(index)
+
+    if not tentativa.isOpened():
+        tentativa.release()
+        return None
+
+    return tentativa
+
+def listar_microfones():
+    if sd is None or CLOUD_MODE:
+        return []
+
+    microfones = []
+    try:
+        dispositivos = sd.query_devices()
+        for idx, dispositivo in enumerate(dispositivos):
+            if dispositivo.get("max_input_channels", 0) > 0:
+                microfones.append({"index": idx, "nome": dispositivo.get("name", f"Microfone {idx}")})
+    except Exception:
+        microfones = []
+
+    return microfones
+
+def abrir_camera(index, fallback=True):
+    global cap
+
+    if cv2 is None or CLOUD_MODE:
+        return False
+
+    camera_anterior = cap
+    nova_cap = _tentar_abrir_camera_por_indice(index)
+    indice_em_uso = index
+
+    if nova_cap is None and fallback:
+        for camera in listar_cameras():
+            idx = camera["index"]
+            nova_cap = _tentar_abrir_camera_por_indice(idx)
+            if nova_cap is not None:
+                indice_em_uso = idx
+                break
+
+    if nova_cap is None:
+        return False
+
+    cap = nova_cap
+    config_dispositivos["camera_index"] = indice_em_uso
+
+    if camera_anterior is not None and camera_anterior is not cap:
+        camera_anterior.release()
+
+    return True
+
+def aplicar_microfone(index):
+    microfones = listar_microfones()
+    indices_validos = {item["index"] for item in microfones}
+
+    if index is None:
+        config_dispositivos["microfone_index"] = None
+        return True
+
+    if index in indices_validos:
+        config_dispositivos["microfone_index"] = index
+        return True
+
+    return False
 
 def contar_dedos(landmarks, lateralidade="Right", orientacao="Palma"):
     pontas_dedos = [8, 12, 16, 20]
@@ -120,9 +256,20 @@ def gerar_frames():
     while True:
         if cap is None or not cap.isOpened():
             print("Tentando abrir a camera...")
-            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(0)
+            if not abrir_camera(config_dispositivos["camera_index"], fallback=True):
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "CAMERA NAO ENCONTRADA", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                estado_atual["gesto"] = "Erro na Camera"
+                estado_atual["imagem"] = "neutro.jpg"
+
+                ret, buffer = cv2.imencode('.jpg', frame)
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+                time.sleep(1)
+                continue
+
             time.sleep(1) # Esperar câmera inicializar
             
         sucesso, frame = cap.read()
@@ -263,26 +410,17 @@ def gerar_frames():
         # --- Lógica de Rosto (Prioridade sobre Mãos se detectar expressão forte) ---
         if resultados_rosto.multi_face_landmarks:
             for face_landmarks in resultados_rosto.multi_face_landmarks:
-                # Desenhar malha do rosto (opcional, pode poluir muito)
-                # mp_desenho.draw_landmarks(frame, face_landmarks, mp_rosto.FACEMESH_TESSELATION, landmark_drawing_spec=None, connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style())
-                
                 exp, img_exp = detectar_expressao(face_landmarks)
                 expressao_detectada = exp
-                
-                # Se detectar uma expressão forte E não tiver gesto de mão importante, mostra a expressão
+
+                # Prioriza expressão facial quando não há gesto de mão forte
                 if img_exp and gesto_principal in ["Nenhuma mao", "Punho Fechado", "Mao Aberta"] and "Dedos" not in gesto_principal:
-                     # Damos prioridade para Sorriso/Surpresa sobre gestos simples
-                     imagem_nome = img_exp
-                exp, img_exp = detectar_expressao(face_landmarks)
-                expressao_detectada = exp
-                
-                # Se detectar uma expressão forte E não tiver gesto de mão importante, mostra a expressão
-                if img_exp and gesto_detectado in ["Nenhuma mao", "Punho Fechado", "Mao Aberta"] and "Dedos" not in gesto_detectado:
-                     # Damos prioridade para Sorriso/Surpresa sobre gestos simples
-                     imagem_nome = img_exp
+                    imagem_nome = img_exp
 
         # Atualizar estado global
-        estado_atual["gesto"] = f"{gesto_detectado} | {expressao_detectada}"
+        estado_atual["gesto"] = gesto_detectado
+        estado_atual["gesto_principal"] = gesto_principal
+        estado_atual["expressao"] = expressao_detectada
         estado_atual["imagem"] = imagem_nome
 
         # Codificar frame para JPEG
@@ -298,10 +436,12 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
+    if CLOUD_MODE or not CV_AVAILABLE:
+        return redirect(url_for('static', filename='images/neutro.jpg'))
     return Response(gerar_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # --- Lógica de Pintura Virtual ---
-canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8)
+canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8) if np is not None else None
 cor_pincel = (255, 0, 0) # Azul BGR (OpenCV usa BGR)
 ponto_anterior = (0, 0)
 
@@ -324,9 +464,16 @@ def gerar_frames_pintura():
 
     while True:
         if cap is None or not cap.isOpened():
-            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-            if not cap.isOpened():
-                cap = cv2.VideoCapture(0)
+            if not abrir_camera(config_dispositivos["camera_index"], fallback=True):
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "ERRO NA CAMERA", (150, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                ret, buffer = cv2.imencode('.jpg', frame)
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                time.sleep(0.5)
+                continue
+
             time.sleep(1)
             
         sucesso, frame = cap.read()
@@ -424,11 +571,60 @@ def pintura():
 
 @app.route('/video_feed_pintura')
 def video_feed_pintura():
+    if CLOUD_MODE or not CV_AVAILABLE:
+        return redirect(url_for('static', filename='images/neutro.jpg'))
     return Response(gerar_frames_pintura(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/current_status')
 def current_status():
     return jsonify(estado_atual)
+
+@app.route('/devices')
+def devices():
+    return jsonify({
+        "cameras": listar_cameras(),
+        "microfones": listar_microfones(),
+        "cloud_mode": CLOUD_MODE,
+        "selecionado": {
+            "camera_index": config_dispositivos["camera_index"],
+            "microfone_index": config_dispositivos["microfone_index"]
+        }
+    })
+
+@app.route('/set_devices', methods=['POST'])
+def set_devices():
+    if CLOUD_MODE:
+        return jsonify({"ok": False, "mensagem": "Seleção de dispositivos não disponível no deploy cloud."}), 400
+
+    dados = request.get_json(silent=True) or {}
+    camera_index = dados.get("camera_index", config_dispositivos["camera_index"])
+    microfone_index = dados.get("microfone_index", config_dispositivos["microfone_index"])
+
+    try:
+        if camera_index is not None:
+            camera_index = int(camera_index)
+        if microfone_index is not None:
+            microfone_index = int(microfone_index)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "mensagem": "Índices inválidos."}), 400
+
+    if camera_index is None:
+        camera_index = config_dispositivos["camera_index"]
+
+    if not abrir_camera(camera_index, fallback=False):
+        return jsonify({"ok": False, "mensagem": f"Não foi possível abrir a câmera {camera_index}."}), 400
+
+    if not aplicar_microfone(microfone_index):
+        return jsonify({"ok": False, "mensagem": "Microfone selecionado é inválido."}), 400
+
+    return jsonify({
+        "ok": True,
+        "mensagem": "Dispositivos atualizados com sucesso.",
+        "selecionado": {
+            "camera_index": config_dispositivos["camera_index"],
+            "microfone_index": config_dispositivos["microfone_index"]
+        }
+    })
 
 if __name__ == "__main__":
     # Host 0.0.0.0 permite acesso de outros dispositivos na rede

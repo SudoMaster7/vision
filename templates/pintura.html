@@ -3,54 +3,99 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pintura Virtual - Vision MVP</title>
+    <title>VisionSudo - Pintura Virtual</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #f8f9fa; }
-        .video-container {
-            position: relative;
-            width: 640px;
-            margin: 0 auto;
-            border: 5px solid #333;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 0 20px rgba(0,0,0,0.2);
+        body {
+            background: linear-gradient(145deg, #020617, #0f172a);
+            min-height: 100vh;
+            color: #e2e8f0;
         }
-        img { width: 100%; display: block; }
+
+        .topbar {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+        }
+
+        .panel {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 16px;
+            background: rgba(15, 23, 42, 0.8);
+            overflow: hidden;
+        }
+
+        .panel-title {
+            background: rgba(30, 41, 59, 0.85);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+            padding: .85rem 1rem;
+            font-weight: 600;
+        }
+
+        .video-wrap {
+            background: #020617;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 480px;
+        }
+
+        .video-wrap img {
+            width: 100%;
+            height: 480px;
+            object-fit: contain;
+            display: block;
+        }
+
         .instructions {
-            margin-top: 20px;
-            padding: 15px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 12px;
+            padding: 1rem;
+            background: rgba(30, 41, 59, 0.65);
+        }
+
+        .instructions li {
+            margin-bottom: .45rem;
+        }
+
+        @media (max-width: 768px) {
+            .video-wrap,
+            .video-wrap img {
+                min-height: 340px;
+                height: 340px;
+            }
         }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-dark bg-dark mb-4">
+    <nav class="navbar topbar mb-4">
         <div class="container">
-            <a class="navbar-brand" href="/">🖐️ Vision MVP</a>
-            <a href="/" class="btn btn-outline-light">Voltar para Gestos</a>
+            <a class="navbar-brand text-light" href="/">🖐️ VisionSudo</a>
+            <a href="/" class="btn btn-outline-light btn-sm">← Voltar para Gestos</a>
         </div>
     </nav>
 
-    <div class="container text-center">
-        <h2 class="mb-4">🎨 Pintura Virtual</h2>
-        
-        <div class="video-container">
-            <img src="{{ url_for('video_feed_pintura') }}" alt="Video Feed">
-        </div>
+    <div class="container">
+        <div class="row g-4 justify-content-center">
+            <div class="col-lg-10 text-center">
+                <h2 class="mb-3">🎨 Pintura Virtual</h2>
+                <p class="text-secondary mb-4">Desenhe em tempo real com o dedo indicador usando rastreamento de mão.</p>
 
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <div class="instructions">
-                    <h4>Como usar:</h4>
-                    <ul class="text-start">
+                <div class="panel mb-4">
+                    <div class="panel-title">Área de Desenho</div>
+                    <div class="video-wrap">
+                        <img src="{{ url_for('video_feed_pintura') }}" alt="Feed Pintura">
+                    </div>
+                </div>
+
+                <div class="instructions text-start">
+                    <h5 class="mb-3">Como usar</h5>
+                    <ul class="mb-0">
                         <li>👆 <strong>Levante o indicador</strong> para desenhar.</li>
-                        <li>🎨 <strong>Mude a cor</strong> tocando nos quadrados no topo da tela.</li>
-                        <li>🧹 <strong>Borracha:</strong> Selecione a cor preta/fundo para apagar.</li>
-                        <li>✊ <strong>Pare de desenhar</strong> baixando o dedo.</li>
-                        <li>🗑️ <strong>Limpar tudo:</strong> Levante todos os dedos (Mão aberta) para limpar a tela.</li>
+                        <li>🎨 <strong>Escolha uma cor</strong> tocando nos botões no topo do vídeo.</li>
+                        <li>🧹 <strong>Borracha:</strong> selecione a cor preta para apagar.</li>
+                        <li>✊ <strong>Pare o traço</strong> baixando o indicador.</li>
+                        <li>🗑️ <strong>Limpar tela:</strong> mostre mão aberta (quatro dedos ou mais).</li>
                     </ul>
                 </div>
             </div>
