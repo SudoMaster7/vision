@@ -279,7 +279,6 @@
         let statusPollingStarted = false;
         let cloudGestureModeStarted = false;
         let localBrowserStream = null;
-        let localBrowserAudioStream = null;
         let cloudHands = null;
         let cloudFaceMesh = null;
         let cloudCamera = null;
@@ -454,25 +453,6 @@
             return { cameras, microfones };
         }
 
-        async function iniciarAudioNavegador(deviceId = null) {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                return false;
-            }
-
-            try {
-                if (localBrowserAudioStream) {
-                    localBrowserAudioStream.getTracks().forEach(track => track.stop());
-                    localBrowserAudioStream = null;
-                }
-
-                const audioConstraints = deviceId ? { deviceId: { exact: deviceId } } : true;
-                localBrowserAudioStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: audioConstraints });
-                return true;
-            } catch (_) {
-                return false;
-            }
-        }
-
         async function carregarDispositivos() {
             fetch('/devices')
                 .then(response => {
@@ -489,20 +469,25 @@
 
                     if (cloudMode) {
                         const salvoCloud = carregarDispositivosSalvos() || {};
-                        listarDispositivosBrowser()
+                        iniciarCameraNavegador(salvoCloud.camera_index || null)
+                            .then(() => listarDispositivosBrowser())
                             .then(async (browserDevices) => {
                                 preencherSelect(cameraSelect, browserDevices.cameras, salvoCloud.camera_index, 'Nenhuma câmera');
-                                preencherSelect(microfoneSelect, browserDevices.microfones, salvoCloud.microfone_index, 'Nenhum microfone');
+                                preencherSelect(
+                                    microfoneSelect,
+                                    [{ index: 'browser-default', nome: 'Padrão do navegador (SpeechRecognition)' }],
+                                    'browser-default',
+                                    'Padrão do navegador'
+                                );
 
                                 cameraSelect.disabled = false;
-                                microfoneSelect.disabled = false;
+                                microfoneSelect.disabled = true;
                                 saveDevicesBtn.disabled = false;
 
                                 devicesMessage.className = 'text-warning';
-                                devicesMessage.textContent = 'Deploy cloud: dispositivos locais via navegador.';
+                                devicesMessage.textContent = 'Deploy cloud: câmera local configurável; microfone usa padrão do navegador.';
 
                                 await iniciarModoCloudGestos();
-                                await iniciarAudioNavegador(microfoneSelect.value || null);
                             })
                             .catch(() => {
                                 devicesMessage.className = 'text-danger';
@@ -768,7 +753,7 @@
             if (cloudMode) {
                 const payloadCloud = {
                     camera_index: cameraSelect.value || null,
-                    microfone_index: microfoneSelect.value || null
+                    microfone_index: 'browser-default'
                 };
 
                 if (!modoSilencioso) {
@@ -776,11 +761,8 @@
                     devicesMessage.textContent = 'Aplicando configuração local do navegador...';
                 }
 
-                Promise.all([
-                    iniciarCameraNavegador(payloadCloud.camera_index),
-                    iniciarAudioNavegador(payloadCloud.microfone_index)
-                ])
-                    .then(([cameraOk]) => {
+                iniciarCameraNavegador(payloadCloud.camera_index)
+                    .then((cameraOk) => {
                         if (!cameraOk) {
                             throw new Error('Não foi possível abrir a câmera selecionada.');
                         }
