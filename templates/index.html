@@ -46,14 +46,6 @@
             object-fit: contain;
         }
 
-        .media-box video {
-            width: 100%;
-            height: 470px;
-            object-fit: contain;
-            background: #020617;
-            transform: scaleX(-1);
-        }
-
         .caption-box {
             border-top: 1px solid rgba(148, 163, 184, 0.25);
             background: rgba(2, 6, 23, 0.85);
@@ -179,8 +171,7 @@
                         <small id="connectionStatus" class="text-success"><span class="pulse"></span>Conectado</small>
                     </div>
                     <div class="media-box">
-                        <img id="serverVideoFeed" src="{{ url_for('video_feed') }}" alt="Feed da Webcam">
-                        <video id="localCameraPreview" autoplay playsinline muted style="display:none;"></video>
+                        <img src="{{ url_for('video_feed') }}" alt="Feed da Webcam">
                     </div>
                     <div class="caption-box">
                         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -257,8 +248,6 @@
         const expressionElement = document.getElementById('expressionName');
         const gestureFullElement = document.getElementById('gestureFull');
         const imgElement = document.getElementById('responseImage');
-        const serverVideoFeed = document.getElementById('serverVideoFeed');
-        const localCameraPreview = document.getElementById('localCameraPreview');
         const cameraSelect = document.getElementById('cameraSelect');
         const microfoneSelect = document.getElementById('microfoneSelect');
         const saveDevicesBtn = document.getElementById('saveDevicesBtn');
@@ -275,12 +264,6 @@
         const speechHistory = [];
         const maxSpeechHistory = 5;
         const devicesStorageKey = 'visionsudo.devices.v1';
-        let cloudMode = false;
-        let statusPollingStarted = false;
-        let cloudGestureModeStarted = false;
-        let localBrowserStream = null;
-        let cloudHands = null;
-        let cloudCamera = null;
 
         function setConnection(ok) {
             if (ok) {
@@ -320,15 +303,6 @@
                     setConnection(false);
                     gestureMainElement.innerText = 'Erro de conexão';
                 });
-        }
-
-        function iniciarPollingStatus() {
-            if (statusPollingStarted) {
-                return;
-            }
-            statusPollingStarted = true;
-            setInterval(atualizarStatus, 450);
-            atualizarStatus();
         }
 
         function preencherSelect(selectElement, itens, selecionado, textoVazio) {
@@ -391,25 +365,8 @@
                     return response.json();
                 })
                 .then(data => {
-                    cloudMode = !!data.cloud_mode;
-
                     preencherSelect(cameraSelect, data.cameras, data.selecionado?.camera_index, 'Nenhuma câmera');
                     preencherSelect(microfoneSelect, data.microfones, data.selecionado?.microfone_index, 'Nenhum microfone');
-
-                    if (cloudMode) {
-                        cameraSelect.disabled = true;
-                        microfoneSelect.disabled = true;
-                        saveDevicesBtn.disabled = true;
-                        devicesMessage.className = 'text-warning';
-                        devicesMessage.textContent = 'Deploy cloud: usando câmera/mic do navegador.';
-                        iniciarModoCloudGestos();
-                        return;
-                    }
-
-                    cameraSelect.disabled = false;
-                    microfoneSelect.disabled = false;
-                    saveDevicesBtn.disabled = false;
-
                     const salvo = carregarDispositivosSalvos();
                     if (salvo) {
                         const aplicouCamera = aplicarSelectSeDisponivel(cameraSelect, salvo.camera_index);
@@ -428,152 +385,6 @@
                     devicesMessage.className = 'text-danger';
                     devicesMessage.textContent = 'Não foi possível carregar os dispositivos.';
                 });
-        }
-
-        async function iniciarCameraNavegador() {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                devicesMessage.className = 'text-danger';
-                devicesMessage.textContent = 'Navegador não suporta acesso à câmera local.';
-                return false;
-            }
-
-            try {
-                if (!localBrowserStream) {
-                    localBrowserStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                }
-                localCameraPreview.srcObject = localBrowserStream;
-                localCameraPreview.style.display = 'block';
-                serverVideoFeed.style.display = 'none';
-                connectionStatus.className = 'text-success';
-                connectionStatus.innerHTML = '<span class="pulse"></span>Câmera local ativa';
-                return true;
-            } catch (error) {
-                devicesMessage.className = 'text-danger';
-                devicesMessage.textContent = 'Permissão da câmera negada ou indisponível no navegador.';
-                return false;
-            }
-        }
-
-        function contarDedosCloud(landmarks) {
-            const dedos = [];
-            dedos.push(landmarks[4].x < landmarks[3].x ? 1 : 0);
-
-            const pontas = [8, 12, 16, 20];
-            for (const ponta of pontas) {
-                dedos.push(landmarks[ponta].y < landmarks[ponta - 2].y ? 1 : 0);
-            }
-
-            return {
-                total: dedos.reduce((acc, item) => acc + item, 0),
-                lista: dedos
-            };
-        }
-
-        function atualizarRespostaCloud(gesto, imagem) {
-            gestureMainElement.innerText = gesto;
-            expressionElement.innerText = 'Neutro';
-            gestureFullElement.innerText = `Cloud (Navegador): ${gesto}`;
-
-            const newSrc = `/static/images/${imagem}?t=${Date.now()}`;
-            const currentSrcBase = imgElement.src.split('?')[0];
-            if (!currentSrcBase.endsWith(imagem) || imgElement.naturalWidth === 0) {
-                imgElement.src = newSrc;
-            }
-        }
-
-        function processarCloudGestos(results) {
-            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                atualizarRespostaCloud('Nenhuma mao', 'neutro.jpg');
-                return;
-            }
-
-            const landmarks = results.multiHandLandmarks[0];
-            const { total, lista } = contarDedosCloud(landmarks);
-
-            const x4 = landmarks[4].x;
-            const y4 = landmarks[4].y;
-            const x8 = landmarks[8].x;
-            const y8 = landmarks[8].y;
-            const distanciaOk = Math.sqrt(((x4 - x8) ** 2) + ((y4 - y8) ** 2));
-
-            const polegarPraCima = landmarks[4].y < landmarks[3].y;
-            const indicadorFechado = landmarks[8].y > landmarks[6].y;
-            const medioFechado = landmarks[12].y > landmarks[10].y;
-            const anelarFechado = landmarks[16].y > landmarks[14].y;
-            const minimoFechado = landmarks[20].y > landmarks[18].y;
-            const outrosDedosFechados = indicadorFechado && medioFechado && anelarFechado && minimoFechado;
-
-            if (distanciaOk < 0.05 && lista[2] === 1 && lista[3] === 1) {
-                atualizarRespostaCloud('OK', 'ok.jpg');
-                return;
-            }
-
-            if (polegarPraCima && outrosDedosFechados) {
-                atualizarRespostaCloud('LIKE', 'like.jpg');
-                return;
-            }
-
-            if (total === 5) {
-                atualizarRespostaCloud('Mao Aberta', 'sol.jpg');
-                return;
-            }
-
-            if (total === 0) {
-                atualizarRespostaCloud('Punho Fechado', 'lua.jpg');
-                return;
-            }
-
-            if (total === 2 && lista[1] === 1 && lista[2] === 1) {
-                atualizarRespostaCloud('Paz e Amor', 'paz.jpg');
-                return;
-            }
-
-            atualizarRespostaCloud(`Dedos: ${total}`, 'neutro.jpg');
-        }
-
-        async function iniciarModoCloudGestos() {
-            if (cloudGestureModeStarted) {
-                return;
-            }
-
-            const cameraOk = await iniciarCameraNavegador();
-            if (!cameraOk) {
-                return;
-            }
-
-            if (!window.Hands || !window.Camera) {
-                devicesMessage.className = 'text-danger';
-                devicesMessage.textContent = 'Biblioteca de gestos não carregou no navegador.';
-                return;
-            }
-
-            cloudHands = new window.Hands({
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-            });
-
-            cloudHands.setOptions({
-                maxNumHands: 1,
-                modelComplexity: 0,
-                minDetectionConfidence: 0.5,
-                minTrackingConfidence: 0.5
-            });
-
-            cloudHands.onResults(processarCloudGestos);
-
-            cloudCamera = new window.Camera(localCameraPreview, {
-                onFrame: async () => {
-                    if (cloudHands) {
-                        await cloudHands.send({ image: localCameraPreview });
-                    }
-                },
-                width: 640,
-                height: 480
-            });
-
-            await cloudCamera.start();
-            cloudGestureModeStarted = true;
-            devicesMessage.className = 'text-success';
-            devicesMessage.textContent = 'Modo cloud ativo: detecção de gestos no navegador.';
         }
 
         function salvarDispositivos(modoSilencioso = false) {
@@ -723,7 +534,8 @@
             });
         }
 
-        iniciarPollingStatus();
+        setInterval(atualizarStatus, 450);
+        atualizarStatus();
         carregarDispositivos();
         saveDevicesBtn.addEventListener('click', salvarDispositivos);
         clearSpeechHistoryBtn.addEventListener('click', () => {
@@ -740,8 +552,6 @@
         };
     </script>
 
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
