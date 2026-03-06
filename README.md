@@ -115,8 +115,7 @@ Em deploy cloud (Vercel), o servidor **não tem acesso à sua câmera física lo
 Por isso:
 * a interface web sobe normalmente;
 * o app ativa **preview de câmera local no navegador** (via permissão do browser);
-* seleção de câmera funciona no navegador em modo cloud;
-* seleção de microfone para legenda usa o dispositivo padrão do navegador (limitação da Web Speech API);
+* seleção de câmera/microfone do servidor fica desabilitada no modo cloud;
 * a legenda de voz continua funcionando no navegador (com HTTPS e permissão de microfone).
 
 Para usar câmera real, continue rodando localmente com:
