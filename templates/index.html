@@ -230,8 +230,11 @@
                             <label for="microfoneSelect" class="control-label">Microfone</label>
                             <select id="microfoneSelect" class="form-select form-select-sm control-select"></select>
                         </div>
-                        <div class="col-12 d-grid">
+                        <div class="col-8 d-grid">
                             <button id="saveDevicesBtn" class="btn btn-sm btn-primary">Salvar dispositivos</button>
+                        </div>
+                        <div class="col-4 d-grid">
+                            <button id="rescanCamerasBtn" class="btn btn-sm btn-outline-secondary">🔄 Atualizar</button>
                         </div>
                         <div class="col-12">
                             <small id="devicesMessage" class="text-secondary">Carregando dispositivos...</small>
@@ -258,6 +261,7 @@
         const stopSpeechBtn = document.getElementById('stopSpeechBtn');
         const speechHistoryElement = document.getElementById('speechHistory');
         const clearSpeechHistoryBtn = document.getElementById('clearSpeechHistoryBtn');
+        const rescanCamerasBtn = document.getElementById('rescanCamerasBtn');
 
         let speechRecognition = null;
         let speechRunning = false;
@@ -369,13 +373,8 @@
                     preencherSelect(microfoneSelect, data.microfones, data.selecionado?.microfone_index, 'Nenhum microfone');
                     const salvo = carregarDispositivosSalvos();
                     if (salvo) {
-                        const aplicouCamera = aplicarSelectSeDisponivel(cameraSelect, salvo.camera_index);
-                        const aplicouMicrofone = aplicarSelectSeDisponivel(microfoneSelect, salvo.microfone_index);
-
-                        if (aplicouCamera || aplicouMicrofone) {
-                            salvarDispositivos(true);
-                            return;
-                        }
+                        aplicarSelectSeDisponivel(cameraSelect, salvo.camera_index);
+                        aplicarSelectSeDisponivel(microfoneSelect, salvo.microfone_index);
                     }
 
                     devicesMessage.className = 'text-secondary';
@@ -463,6 +462,14 @@
         function inicializarLegendaVoz() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+            const acessoSeguroLegenda = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+            if (!acessoSeguroLegenda) {
+                atualizarStatusLegenda('Requer HTTPS', 'text-danger');
+                speechCaption.innerText = 'Legenda por voz requer HTTPS (ou localhost).';
+                startSpeechBtn.disabled = true;
+                return;
+            }
+
             if (!SpeechRecognition) {
                 atualizarStatusLegenda('Não suportado no navegador', 'text-danger');
                 startSpeechBtn.disabled = true;
@@ -498,6 +505,7 @@
                 const exibicao = (final || parcial).trim();
                 if (exibicao) {
                     speechCaption.innerText = exibicao;
+                    atualizarStatusLegenda('Ouvindo...', 'text-success');
                 }
 
                 if (final.trim()) {
@@ -505,8 +513,33 @@
                 }
             };
 
-            speechRecognition.onerror = () => {
-                atualizarStatusLegenda('Falha no reconhecimento', 'text-danger');
+            speechRecognition.onerror = (event) => {
+                const motivo = event?.error || 'desconhecido';
+                const errosFatais = ['not-allowed', 'audio-capture', 'service-not-allowed'];
+                const errosIgnoraveis = ['no-speech', 'aborted'];
+
+                if (errosIgnoraveis.includes(motivo)) {
+                    return;
+                }
+
+                if (motivo === 'network') {
+                    atualizarStatusLegenda('Sem conex\u00e3o com servi\u00e7o de voz', 'text-warning');
+                    speechCaption.innerText = 'Verifique sua conex\u00e3o com a internet. O reconhecimento de voz precisa de acesso online (Google Speech).';
+                    speechRunning = false;
+                    startSpeechBtn.disabled = false;
+                    stopSpeechBtn.disabled = true;
+                    return;
+                }
+
+                atualizarStatusLegenda(`Falha: ${motivo}`, 'text-danger');
+                if (errosFatais.includes(motivo)) {
+                    speechRunning = false;
+                    startSpeechBtn.disabled = false;
+                    stopSpeechBtn.disabled = true;
+                }
+                if (motivo === 'not-allowed' || motivo === 'audio-capture') {
+                    speechCaption.innerText = 'Permita o microfone no navegador para usar a legenda.';
+                }
             };
 
             speechRecognition.onend = () => {
@@ -537,7 +570,27 @@
         setInterval(atualizarStatus, 450);
         atualizarStatus();
         carregarDispositivos();
-        saveDevicesBtn.addEventListener('click', salvarDispositivos);
+        saveDevicesBtn.addEventListener('click', () => salvarDispositivos());
+        rescanCamerasBtn.addEventListener('click', () => {
+            rescanCamerasBtn.disabled = true;
+            devicesMessage.className = 'text-warning';
+            devicesMessage.textContent = 'Procurando câmeras...';
+            fetch('/rescan_cameras', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    devicesMessage.textContent = data.mensagem || 'Re-scan iniciado.';
+                    // Recarregar lista após 6 segundos
+                    setTimeout(() => {
+                        carregarDispositivos();
+                        rescanCamerasBtn.disabled = false;
+                    }, 6000);
+                })
+                .catch(() => {
+                    devicesMessage.className = 'text-danger';
+                    devicesMessage.textContent = 'Erro ao buscar câmeras.';
+                    rescanCamerasBtn.disabled = false;
+                });
+        });
         clearSpeechHistoryBtn.addEventListener('click', () => {
             speechHistory.length = 0;
             renderizarHistoricoLegenda();

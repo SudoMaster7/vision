@@ -88,6 +88,13 @@ Utilizando a malha facial (Face Mesh), o sistema detecta:
     * A transcrição em português (Brasil) aparecerá em tempo real no campo de legenda.
     * O painel mantém um histórico curto das últimas frases com horário.
 
+## ⚠️ Solução rápida para câmera com erro
+
+Se aparecer **Erro na Câmera**:
+* Feche outros apps que podem estar usando a webcam (ex.: `app_gui.py`, Zoom, Meet, Teams, OBS).
+* Na interface web, troque para outro índice de câmera e clique em **Salvar dispositivos**.
+* Recarregue a página após liberar a câmera.
+
 ## 🖥️ Execução da versão GUI (Tkinter)
 
 Se quiser usar a interface desktop:

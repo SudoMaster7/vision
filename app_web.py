@@ -18,17 +18,33 @@ try:
     import sounddevice as sd
 except Exception:
     sd = None
+import time
+import threading
 from flask import Flask, render_template, Response, jsonify, request, redirect, url_for
 
 app = Flask(__name__)
-CLOUD_MODE = os.getenv("VERCEL") == "1"
+CLOUD_MODE = os.getenv("VERCEL") == "1" and bool(os.getenv("VERCEL_URL"))
 CV_AVAILABLE = cv2 is not None and mp is not None and np is not None
 
+# --- Locks para thread safety ---
+camera_lock = threading.Lock()
+estado_lock = threading.Lock()
+pintura_lock = threading.Lock()
+
+# --- Cache de listagem de câmeras ---
+_cameras_cache = []
+_cameras_cache_ts = 0
+_CAMERAS_CACHE_TTL = 10  # segundos
+
 # --- Configurações MediaPipe ---
-mp_maos = mp.solutions.hands if mp is not None else None
-mp_rosto = mp.solutions.face_mesh if mp is not None else None
-mp_desenho = mp.solutions.drawing_utils if mp is not None else None
-mp_drawing_styles = mp.solutions.drawing_styles if mp is not None else None
+try:
+    mp_maos = mp.solutions.hands if mp is not None else None
+    mp_rosto = mp.solutions.face_mesh if mp is not None else None
+    mp_desenho = mp.solutions.drawing_utils if mp is not None else None
+    mp_drawing_styles = mp.solutions.drawing_styles if mp is not None else None
+except AttributeError:
+    mp_maos = mp_rosto = mp_desenho = mp_drawing_styles = None
+    CV_AVAILABLE = False
 
 def inicializar_mediapipe():
     if not CV_AVAILABLE or CLOUD_MODE:
@@ -65,6 +81,23 @@ def inicializar_mediapipe():
 
 maos, rosto = inicializar_mediapipe()
 
+# Instância separada do MediaPipe para Pintura Virtual (thread safety)
+def _inicializar_maos_pintura():
+    if not CV_AVAILABLE or CLOUD_MODE or mp_maos is None:
+        return None
+    try:
+        return mp_maos.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            model_complexity=0,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+    except Exception:
+        return None
+
+maos_pintura = _inicializar_maos_pintura()
+
 # Estado Global
 estado_atual = {
     "gesto": "Nenhum",
@@ -80,24 +113,80 @@ config_dispositivos = {
 
 cap = None
 
+def _probar_camera_con_timeout(idx, timeout=4.0):
+    """Tenta abrir uma câmera com timeout para não travar em CAP_DSHOW."""
+    resultado = [False]
+
+    def _tentar():
+        try:
+            t = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            if t.isOpened():
+                resultado[0] = True
+                t.release()
+            else:
+                t.release()
+        except Exception:
+            pass
+
+    th = threading.Thread(target=_tentar, daemon=True)
+    th.start()
+    th.join(timeout=timeout)
+    return resultado[0]
+
+_scan_em_andamento = False
+
+def _scan_cameras_background():
+    """Escaneia câmeras em background e atualiza o cache."""
+    global _cameras_cache, _cameras_cache_ts, _scan_em_andamento
+
+    if cv2 is None or CLOUD_MODE:
+        return
+
+    if _scan_em_andamento:
+        return
+    _scan_em_andamento = True
+
+    try:
+        cameras = []
+        idx_ativo = config_dispositivos.get("camera_index", 0)
+
+        # Incluir a câmera ativa sem testar (já sabemos que funciona)
+        cameras.append({"index": idx_ativo, "nome": f"Câmera {idx_ativo}"})
+
+        for idx in range(6):  # max 6 câmeras
+            if idx == idx_ativo:
+                continue
+            if _probar_camera_con_timeout(idx, timeout=4.0):
+                cameras.append({"index": idx, "nome": f"Câmera {idx}"})
+
+        cameras.sort(key=lambda c: c["index"])
+        _cameras_cache = cameras
+        _cameras_cache_ts = time.time()
+    finally:
+        _scan_em_andamento = False
+
 def listar_cameras(max_tentativas=6):
+    """Retorna cache de câmeras. Se vazio, retorna a câmera ativa como fallback."""
+    global _cameras_cache, _cameras_cache_ts
+
     if cv2 is None or CLOUD_MODE:
         return []
 
-    cameras = []
-    for idx in range(max_tentativas):
-        tentativa = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-        if not tentativa.isOpened():
-            tentativa = cv2.VideoCapture(idx)
+    # Se tem cache válido, retorna
+    if _cameras_cache:
+        return _cameras_cache
 
-        if tentativa.isOpened():
-            cameras.append({"index": idx, "nome": f"Câmera {idx}"})
-            tentativa.release()
+    # Fallback: retorna pelo menos a câmera ativa
+    idx_ativo = config_dispositivos.get("camera_index", 0)
+    return [{"index": idx_ativo, "nome": f"Câmera {idx_ativo}"}]
 
-    if not cameras:
-        cameras.append({"index": 0, "nome": "Câmera 0 (padrão)"})
+# Iniciar scan de câmeras em background (com delay para dar tempo ao sistema)
+def _scan_delayed():
+    time.sleep(3)  # esperar backend DirectShow estabilizar
+    _scan_cameras_background()
 
-    return cameras
+if CV_AVAILABLE and not CLOUD_MODE:
+    threading.Thread(target=_scan_delayed, daemon=True).start()
 
 def _tentar_abrir_camera_por_indice(index):
     if cv2 is None or CLOUD_MODE:
@@ -138,28 +227,34 @@ def abrir_camera(index, fallback=True):
     if cv2 is None or CLOUD_MODE:
         return False
 
-    camera_anterior = cap
-    nova_cap = _tentar_abrir_camera_por_indice(index)
-    indice_em_uso = index
+    with camera_lock:
+        # Se a mesma câmera já está aberta e funcionando, não re-abrir
+        if (index == config_dispositivos["camera_index"]
+                and cap is not None and cap.isOpened()):
+            return True
 
-    if nova_cap is None and fallback:
-        for camera in listar_cameras():
-            idx = camera["index"]
-            nova_cap = _tentar_abrir_camera_por_indice(idx)
-            if nova_cap is not None:
-                indice_em_uso = idx
-                break
+        camera_anterior = cap
+        nova_cap = _tentar_abrir_camera_por_indice(index)
+        indice_em_uso = index
 
-    if nova_cap is None:
-        return False
+        if nova_cap is None and fallback:
+            for camera in listar_cameras():
+                idx = camera["index"]
+                nova_cap = _tentar_abrir_camera_por_indice(idx)
+                if nova_cap is not None:
+                    indice_em_uso = idx
+                    break
 
-    cap = nova_cap
-    config_dispositivos["camera_index"] = indice_em_uso
+        if nova_cap is None:
+            return False
 
-    if camera_anterior is not None and camera_anterior is not cap:
-        camera_anterior.release()
+        cap = nova_cap
+        config_dispositivos["camera_index"] = indice_em_uso
 
-    return True
+        if camera_anterior is not None and camera_anterior is not cap:
+            camera_anterior.release()
+
+        return True
 
 def aplicar_microfone(index):
     microfones = listar_microfones()
@@ -217,8 +312,6 @@ def contar_dedos(landmarks, lateralidade="Right", orientacao="Palma"):
 
     return sum(dedos_levantados), dedos_levantados
 
-import time
-
 def detectar_expressao(face_landmarks):
     # Pontos chave do rosto (MediaPipe Face Mesh)
     # Lábio superior: 13, Lábio inferior: 14
@@ -254,13 +347,18 @@ def gerar_frames():
     COOLDOWN_PRINT = 3.0 # 3 segundos de intervalo entre prints
 
     while True:
-        if cap is None or not cap.isOpened():
+        # Verificar câmera sob lock
+        with camera_lock:
+            cam_ok = cap is not None and cap.isOpened()
+
+        if not cam_ok:
             print("Tentando abrir a camera...")
             if not abrir_camera(config_dispositivos["camera_index"], fallback=True):
                 frame = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(frame, "CAMERA NAO ENCONTRADA", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                estado_atual["gesto"] = "Erro na Camera"
-                estado_atual["imagem"] = "neutro.jpg"
+                with estado_lock:
+                    estado_atual["gesto"] = "Erro na Camera"
+                    estado_atual["imagem"] = "neutro.jpg"
 
                 ret, buffer = cv2.imencode('.jpg', frame)
                 frame_bytes = buffer.tobytes()
@@ -270,23 +368,36 @@ def gerar_frames():
                 time.sleep(1)
                 continue
 
-            time.sleep(1) # Esperar câmera inicializar
-            
-        sucesso, frame = cap.read()
+            time.sleep(0.5) # Esperar câmera inicializar
+            continue
+
+        # Ler frame sob lock
+        with camera_lock:
+            if cap is not None:
+                sucesso, frame = cap.read()
+            else:
+                sucesso, frame = False, None
+
         if not sucesso:
             # Se falhar, envia um frame preto com aviso
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(frame, "CAMERA NAO ENCONTRADA", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(frame, "Verifique se outra app esta usando a camera", (35, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             
-            # Atualiza estado para erro
-            estado_atual["gesto"] = "Erro na Camera"
-            estado_atual["imagem"] = "neutro.jpg"
+            with estado_lock:
+                estado_atual["gesto"] = "Erro na Camera"
+                estado_atual["imagem"] = "neutro.jpg"
+
+            with camera_lock:
+                if cap is not None:
+                    cap.release()
+                    cap = None
             
             ret, buffer = cv2.imencode('.jpg', frame)
             frame_bytes = buffer.tobytes()
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(1) # Evita loop rápido demais
+            time.sleep(1)
             continue
 
         # Espelhar frame
@@ -367,7 +478,7 @@ def gerar_frames():
 
                     # Funcionalidade: Print ao fazer OK com as Costas da Mão Direita
                     if lateralidade == "Right" and orientacao == "Costas":
-                        agora = time.time() + 0.3 # pequeno ajuste de tempo
+                        agora = time.time()
                         if agora - ultimo_print > COOLDOWN_PRINT:
                             if not os.path.exists("screenshots"):
                                 os.makedirs("screenshots")
@@ -418,10 +529,11 @@ def gerar_frames():
                     imagem_nome = img_exp
 
         # Atualizar estado global
-        estado_atual["gesto"] = gesto_detectado
-        estado_atual["gesto_principal"] = gesto_principal
-        estado_atual["expressao"] = expressao_detectada
-        estado_atual["imagem"] = imagem_nome
+        with estado_lock:
+            estado_atual["gesto"] = gesto_detectado
+            estado_atual["gesto_principal"] = gesto_principal
+            estado_atual["expressao"] = expressao_detectada
+            estado_atual["imagem"] = imagem_nome
 
         # Codificar frame para JPEG
         ret, buffer = cv2.imencode('.jpg', frame)
@@ -429,6 +541,7 @@ def gerar_frames():
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        time.sleep(0.033)  # ~30 FPS limiter
 
 @app.route('/')
 def index():
@@ -442,11 +555,14 @@ def video_feed():
 
 # --- Lógica de Pintura Virtual ---
 canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8) if np is not None else None
+canvas_mascara = np.zeros((480, 640), dtype=np.uint8) if np is not None else None
 cor_pincel = (255, 0, 0) # Azul BGR (OpenCV usa BGR)
 ponto_anterior = (0, 0)
 
 def gerar_frames_pintura():
-    global cap, canvas_pintura, cor_pincel, ponto_anterior
+    global cap, canvas_pintura, canvas_mascara, cor_pincel, ponto_anterior
+    
+    mp_instance = maos_pintura if maos_pintura is not None else maos
     
     # Cores disponíveis (BGR)
     cores = [
@@ -463,7 +579,11 @@ def gerar_frames_pintura():
         botoes.append( (40 + i * 120, 20, largura_botao, 60) )
 
     while True:
-        if cap is None or not cap.isOpened():
+        # Verificar câmera sob lock
+        with camera_lock:
+            cam_ok = cap is not None and cap.isOpened()
+
+        if not cam_ok:
             if not abrir_camera(config_dispositivos["camera_index"], fallback=True):
                 frame = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(frame, "ERRO NA CAMERA", (150, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
@@ -474,13 +594,25 @@ def gerar_frames_pintura():
                 time.sleep(0.5)
                 continue
 
-            time.sleep(1)
-            
-        sucesso, frame = cap.read()
+            time.sleep(0.5)
+            continue
+
+        # Ler frame sob lock
+        with camera_lock:
+            if cap is not None:
+                sucesso, frame = cap.read()
+            else:
+                sucesso, frame = False, None
+
         if not sucesso:
-            # Frame de erro para não travar o vídeo
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(frame, "ERRO NA CAMERA", (150, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            with camera_lock:
+                if cap is not None:
+                    cap.release()
+                    cap = None
+
             ret, buffer = cv2.imencode('.jpg', frame)
             frame_bytes = buffer.tobytes()
             yield (b'--frame\r\n'
@@ -492,78 +624,76 @@ def gerar_frames_pintura():
         # Forçar tamanho 640x480 para bater com o canvas
         frame = cv2.resize(frame, (640, 480))
         
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        resultados = maos.process(frame_rgb)
+        # Downscale para MediaPipe (coordenadas normalizadas 0-1)
+        frame_small = cv2.resize(frame, (320, 240))
+        frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
+        resultados = mp_instance.process(frame_rgb)
         
-        # Desenhar interface (botões)
-        for i, (cor, nome) in enumerate(cores):
-            x, y, w, h = botoes[i]
-            cv2.rectangle(frame, (x, y), (x+w, y+h), cor, -1)
-            cv2.putText(frame, nome, (x+10, y+40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            # Borda branca no botão selecionado
-            if cor == cor_pincel:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 255), 3)
+        with pintura_lock:
+            # Desenhar interface (botões)
+            for i, (cor, nome) in enumerate(cores):
+                x, y, w, h = botoes[i]
+                cor_botao = cor if cor != (0, 0, 0) else (80, 80, 80)
+                cv2.rectangle(frame, (x, y), (x+w, y+h), cor_botao, -1)
+                cv2.putText(frame, nome, (x+10, y+40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # Borda branca no botão selecionado
+                if cor == cor_pincel:
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 255), 3)
 
-        if resultados.multi_hand_landmarks:
-            for hand_landmarks in resultados.multi_hand_landmarks:
-                # Pontos importantes
-                # 8: Ponta do indicador
-                # 12: Ponta do médio (para verificar se está levantado ou não)
-                
-                x8, y8 = int(hand_landmarks.landmark[8].x * 640), int(hand_landmarks.landmark[8].y * 480)
-                
-                # Verificar se indicador está levantado (y da ponta < y da articulação média)
-                indicador_levantado = hand_landmarks.landmark[8].y < hand_landmarks.landmark[6].y
-                
-                # Verificar se é mão aberta (para limpar tela)
-                # Contagem rápida de dedos levantados
-                dedos_up = 0
-                if hand_landmarks.landmark[8].y < hand_landmarks.landmark[6].y: dedos_up += 1
-                if hand_landmarks.landmark[12].y < hand_landmarks.landmark[10].y: dedos_up += 1
-                if hand_landmarks.landmark[16].y < hand_landmarks.landmark[14].y: dedos_up += 1
-                if hand_landmarks.landmark[20].y < hand_landmarks.landmark[18].y: dedos_up += 1
-                
-                if dedos_up >= 4: # Mão aberta -> Limpar
-                    canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(frame, "TELA LIMPA", (250, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    ponto_anterior = (0, 0)
-                
-                elif indicador_levantado:
-                    # Desenhar círculo na ponta do dedo com a cor atual
-                    cv2.circle(frame, (x8, y8), 10, cor_pincel, -1)
+            if resultados.multi_hand_landmarks:
+                for hand_landmarks in resultados.multi_hand_landmarks:
+                    x8 = int(hand_landmarks.landmark[8].x * 640)
+                    y8 = int(hand_landmarks.landmark[8].y * 480)
                     
-                    # Verificar colisão com botões (Seleção de Cor)
-                    if y8 < 100: # Se estiver no topo da tela
-                        for i, (x, y, w, h) in enumerate(botoes):
-                            if x < x8 < x+w and y < y8 < y+h:
-                                cor_pincel = cores[i][0]
-                                ponto_anterior = (0, 0) # Resetar traço para não riscar ao selecionar
+                    indicador_levantado = hand_landmarks.landmark[8].y < hand_landmarks.landmark[6].y
                     
-                    # Desenhar no canvas
-                    else:
-                        if ponto_anterior == (0, 0):
-                            ponto_anterior = (x8, y8)
+                    dedos_up = 0
+                    if hand_landmarks.landmark[8].y < hand_landmarks.landmark[6].y: dedos_up += 1
+                    if hand_landmarks.landmark[12].y < hand_landmarks.landmark[10].y: dedos_up += 1
+                    if hand_landmarks.landmark[16].y < hand_landmarks.landmark[14].y: dedos_up += 1
+                    if hand_landmarks.landmark[20].y < hand_landmarks.landmark[18].y: dedos_up += 1
+                    
+                    if dedos_up >= 4: # Mão aberta -> Limpar
+                        canvas_pintura = np.zeros((480, 640, 3), dtype=np.uint8)
+                        canvas_mascara = np.zeros((480, 640), dtype=np.uint8)
+                        cv2.putText(frame, "TELA LIMPA", (250, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        ponto_anterior = (0, 0)
+                    
+                    elif indicador_levantado:
+                        cor_cursor = cor_pincel if cor_pincel != (0, 0, 0) else (80, 80, 80)
+                        cv2.circle(frame, (x8, y8), 10, cor_cursor, -1)
                         
-                        # Desenhar linha
-                        cv2.line(canvas_pintura, ponto_anterior, (x8, y8), cor_pincel, 5)
-                        ponto_anterior = (x8, y8)
-                else:
-                    ponto_anterior = (0, 0)
+                        if y8 < 100:
+                            for i, (bx, by, bw, bh) in enumerate(botoes):
+                                if bx < x8 < bx+bw and by < y8 < by+bh:
+                                    cor_pincel = cores[i][0]
+                                    ponto_anterior = (0, 0)
+                        else:
+                            if ponto_anterior == (0, 0):
+                                ponto_anterior = (x8, y8)
+                            
+                            if cor_pincel == (0, 0, 0):
+                                # Borracha: limpar canvas e máscara com traço mais grosso
+                                cv2.line(canvas_pintura, ponto_anterior, (x8, y8), (0, 0, 0), 12)
+                                cv2.line(canvas_mascara, ponto_anterior, (x8, y8), 0, 12)
+                            else:
+                                cv2.line(canvas_pintura, ponto_anterior, (x8, y8), cor_pincel, 5)
+                                cv2.line(canvas_mascara, ponto_anterior, (x8, y8), 255, 5)
+                            ponto_anterior = (x8, y8)
+                    else:
+                        ponto_anterior = (0, 0)
 
-        # Mesclar canvas com frame
-        # Criar máscara onde há desenho
-        img_gray = cv2.cvtColor(canvas_pintura, cv2.COLOR_BGR2GRAY)
-        _, img_inv = cv2.threshold(img_gray, 10, 255, cv2.THRESH_BINARY_INV)
-        img_inv = cv2.cvtColor(img_inv, cv2.COLOR_GRAY2BGR)
-        
-        # Onde tem desenho no canvas, usamos o canvas. Onde não tem, usamos o frame.
-        frame = cv2.bitwise_and(frame, img_inv)
-        frame = cv2.bitwise_or(frame, canvas_pintura)
+            # Mesclar canvas com frame usando máscara explícita
+            mascara_3c = cv2.cvtColor(canvas_mascara, cv2.COLOR_GRAY2BGR)
+            mascara_inv = cv2.bitwise_not(mascara_3c)
+            frame = cv2.bitwise_and(frame, mascara_inv)
+            frame = cv2.bitwise_or(frame, cv2.bitwise_and(canvas_pintura, mascara_3c))
 
         ret, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        time.sleep(0.033)  # ~30 FPS limiter
 
 @app.route('/pintura')
 def pintura():
@@ -577,7 +707,9 @@ def video_feed_pintura():
 
 @app.route('/current_status')
 def current_status():
-    return jsonify(estado_atual)
+    with estado_lock:
+        data = dict(estado_atual)
+    return jsonify(data)
 
 @app.route('/devices')
 def devices():
@@ -590,6 +722,16 @@ def devices():
             "microfone_index": config_dispositivos["microfone_index"]
         }
     })
+
+@app.route('/rescan_cameras', methods=['POST'])
+def rescan_cameras():
+    """Dispara re-scan de câmeras em background e retorna status."""
+    if CLOUD_MODE:
+        return jsonify({"ok": False, "mensagem": "Não disponível no cloud."}), 400
+    if _scan_em_andamento:
+        return jsonify({"ok": True, "mensagem": "Scan já em andamento, aguarde..."})
+    threading.Thread(target=_scan_cameras_background, daemon=True).start()
+    return jsonify({"ok": True, "mensagem": "Re-scan iniciado. Recarregue em alguns segundos."})
 
 @app.route('/set_devices', methods=['POST'])
 def set_devices():
@@ -629,4 +771,5 @@ def set_devices():
 if __name__ == "__main__":
     # Host 0.0.0.0 permite acesso de outros dispositivos na rede
     # debug=False é IMPORTANTE no Windows para não abrir a câmera 2 vezes
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    # threaded=True permite servir /devices enquanto /video_feed faz streaming
+    app.run(debug=False, host='0.0.0.0', port=5000, threaded=True)
