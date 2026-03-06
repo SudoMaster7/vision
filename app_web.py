@@ -457,8 +457,11 @@ def gerar_frames():
                 distancia_ok = ((x4 - x8)**2 + (y4 - y8)**2)**0.5
                 
                 # Lógica Like melhorada
-                # Polegar para cima: ponta (4) acima da articulação IP (3)
-                polegar_pra_cima = hand_landmarks.landmark[4].y < hand_landmarks.landmark[3].y
+                # Polegar para cima: ponta (4) SIGNIFICATIVAMENTE acima da base (2)
+                # Usar margem para evitar falsos positivos
+                margem_polegar = 0.04  # margem vertical normalizada
+                polegar_pra_cima = (hand_landmarks.landmark[4].y < hand_landmarks.landmark[3].y - margem_polegar
+                                     and hand_landmarks.landmark[4].y < hand_landmarks.landmark[2].y - margem_polegar)
                 
                 indicador_fechado = hand_landmarks.landmark[8].y > hand_landmarks.landmark[6].y
                 medio_fechado = hand_landmarks.landmark[12].y > hand_landmarks.landmark[10].y
@@ -466,15 +469,24 @@ def gerar_frames():
                 minimo_fechado = hand_landmarks.landmark[20].y > hand_landmarks.landmark[18].y
                 
                 outros_dedos_fechados = indicador_fechado and medio_fechado and anelar_fechado and minimo_fechado
+                
+                # Detectar indicador levantado sozinho (Apontar)
+                indicador_levantado = lista_dedos[1] == 1
+                medio_levantado = lista_dedos[2] == 1
+                anelar_levantado = lista_dedos[3] == 1 if len(lista_dedos) > 3 else False
+                minimo_levantado = lista_dedos[4] == 1 if len(lista_dedos) > 4 else False
 
                 gesto_temp = f"Dedos: {total_dedos}"
                 img_temp = "neutro.jpg"
                 prioridade = 0
 
-                if distancia_ok < (0.15 * escala_mao) and lista_dedos[2] == 1 and lista_dedos[3] == 1: # OK mais robusto
+                # --- Detecção de gestos (ordem de prioridade) ---
+
+                if distancia_ok < (0.18 * escala_mao) and (lista_dedos[2] == 1 or lista_dedos[3] == 1):
+                    # OK: polegar e indicador formam círculo
                     gesto_temp = "OK"
                     img_temp = "ok.jpg"
-                    prioridade = 5
+                    prioridade = 6
 
                     # Funcionalidade: Print ao fazer OK com as Costas da Mão Direita
                     if lateralidade == "Right" and orientacao == "Costas":
@@ -485,28 +497,45 @@ def gerar_frames():
                             
                             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                             filename = f"screenshots/print_{timestamp}.jpg"
-                            # Salvar o frame original (sem desenhos do mediapipe se possível, mas aqui 'frame' já tem desenhos)
-                            # Se quisesse limpo, teria que ter salvo uma cópia antes do mp_desenho.draw_landmarks
-                            # Mas o usuário pediu "print da camera", então com os desenhos é aceitável/esperado para debug visual.
                             cv2.imwrite(filename, frame)
-                            print(f"📸 Screenshot salvo: {filename}")
+                            print(f"\U0001f4f8 Screenshot salvo: {filename}")
                             ultimo_print = agora
+
                 elif polegar_pra_cima and outros_dedos_fechados:
+                    # LIKE: polegar para cima, outros fechados
                     gesto_temp = "LIKE"
                     img_temp = "like.jpg"
+                    prioridade = 5
+
+                elif total_dedos == 2 and indicador_levantado and medio_levantado and not anelar_levantado and not minimo_levantado:
+                    # Paz e Amor: indicador + médio levantados
+                    gesto_temp = "Paz e Amor"
+                    img_temp = "paz.jpg"
                     prioridade = 4
+
+                elif indicador_levantado and minimo_levantado and not medio_levantado and not anelar_levantado:
+                    # Rock: indicador + mindinho levantados
+                    gesto_temp = "Rock"
+                    img_temp = "like.jpg"
+                    prioridade = 4
+
+                elif total_dedos == 1 and indicador_levantado:
+                    # Apontar: só indicador levantado
+                    gesto_temp = "Apontando"
+                    img_temp = "neutro.jpg"
+                    prioridade = 2
+
                 elif total_dedos == 5:
+                    # Mão Aberta: todos os dedos levantados
                     gesto_temp = "Mao Aberta"
                     img_temp = "sol.jpg"
-                    prioridade = 2
-                elif outros_dedos_fechados: # Punho Fechado (Se não for Like, mas dedos fechados)
+                    prioridade = 3
+
+                elif outros_dedos_fechados and not polegar_pra_cima:
+                    # Punho Fechado: todos os dedos fechados (sem polegar pra cima)
                     gesto_temp = "Punho Fechado"
                     img_temp = "lua.jpg"
                     prioridade = 1
-                elif total_dedos == 2 and lista_dedos[1] == 1 and lista_dedos[2] == 1:
-                    gesto_temp = "Paz e Amor"
-                    img_temp = "paz.jpg"
-                    prioridade = 3
                 
                 gestos_lista.append(f"{lateralidade} ({orientacao}): {gesto_temp}")
                 

@@ -152,6 +152,45 @@
                 min-height: 340px;
             }
         }
+
+        .gesture-card {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 10px;
+            padding: 0.7rem;
+            text-align: center;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .gesture-card:hover {
+            border-color: rgba(99, 102, 241, 0.5);
+            background: rgba(30, 41, 59, 0.85);
+        }
+
+        .gesture-emoji {
+            font-size: 1.8rem;
+            margin-bottom: 0.3rem;
+        }
+
+        .gesture-name {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+
+        .gesture-desc {
+            font-size: 0.72rem;
+            color: #94a3b8;
+            margin-top: 0.2rem;
+            line-height: 1.3;
+        }
+
+        .gesture-img-label {
+            font-size: 0.65rem;
+            color: rgba(99, 102, 241, 0.7);
+            margin-top: 0.3rem;
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
@@ -238,6 +277,122 @@
                         </div>
                         <div class="col-12">
                             <small id="devicesMessage" class="text-secondary">Carregando dispositivos...</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guia de Gestos e Expressões -->
+        <div class="row g-4 mt-1">
+            <div class="col-12">
+                <div class="app-card p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="status-label" style="font-size:.9rem;">Gestos e Expressões Reconhecidos</span>
+                        <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="document.getElementById('guideContent').classList.toggle('d-none')">Mostrar/Ocultar</button>
+                    </div>
+                    <div id="guideContent">
+                        <div class="row g-2">
+                            <!-- Gestos de Mão -->
+                            <div class="col-lg-8">
+                                <div class="status-label mb-2">🖐️ Gestos de Mão</div>
+                                <div class="row g-2">
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">👍</div>
+                                            <div class="gesture-name">LIKE</div>
+                                            <div class="gesture-desc">Polegar para cima, outros dedos fechados</div>
+                                            <div class="gesture-img-label">like.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">👌</div>
+                                            <div class="gesture-name">OK</div>
+                                            <div class="gesture-desc">Polegar e indicador formam um círculo</div>
+                                            <div class="gesture-img-label">ok.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">✌️</div>
+                                            <div class="gesture-name">Paz e Amor</div>
+                                            <div class="gesture-desc">Indicador e médio levantados</div>
+                                            <div class="gesture-img-label">paz.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">🤘</div>
+                                            <div class="gesture-name">Rock</div>
+                                            <div class="gesture-desc">Indicador e mindinho levantados</div>
+                                            <div class="gesture-img-label">like.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">☝️</div>
+                                            <div class="gesture-name">Apontando</div>
+                                            <div class="gesture-desc">Apenas o indicador levantado</div>
+                                            <div class="gesture-img-label">neutro.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">🖐️</div>
+                                            <div class="gesture-name">Mão Aberta</div>
+                                            <div class="gesture-desc">Todos os 5 dedos levantados</div>
+                                            <div class="gesture-img-label">sol.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">✊</div>
+                                            <div class="gesture-name">Punho Fechado</div>
+                                            <div class="gesture-desc">Todos os dedos fechados</div>
+                                            <div class="gesture-img-label">lua.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-md-4">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">📸</div>
+                                            <div class="gesture-name">Screenshot</div>
+                                            <div class="gesture-desc">OK com costas da mão direita</div>
+                                            <div class="gesture-img-label">Salva em /screenshots</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Expressões Faciais -->
+                            <div class="col-lg-4">
+                                <div class="status-label mb-2">😊 Expressões Faciais</div>
+                                <div class="row g-2">
+                                    <div class="col-sm-6 col-lg-12">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">😀</div>
+                                            <div class="gesture-name">Sorriso</div>
+                                            <div class="gesture-desc">Sorria abertamente para a câmera</div>
+                                            <div class="gesture-img-label">sorriso.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-lg-12">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">😮</div>
+                                            <div class="gesture-name">Surpresa</div>
+                                            <div class="gesture-desc">Abra a boca (boca de "O")</div>
+                                            <div class="gesture-img-label">surpresa.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-lg-12">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">😐</div>
+                                            <div class="gesture-name">Neutro</div>
+                                            <div class="gesture-desc">Expressão neutra / sem expressão</div>
+                                            <div class="gesture-img-label">neutro.jpg</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
