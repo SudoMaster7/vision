@@ -63,4 +63,7 @@ criar_imagem('sorriso.jpg', (255, 255, 0), "VOCE ESTA SORRINDO!", cor_texto=(0, 
 # 8. Surpresa (Expressão)
 criar_imagem('surpresa.jpg', (0, 0, 255), "UAU! SURPRESA!", cor_texto=(255, 255, 255))
 
+# 9. Olhos Fechados (Expressão)
+criar_imagem('olhos_fechados.jpg', (40, 30, 60), "OLHOS FECHADOS", cor_texto=(200, 180, 255))
+
 print("Todas as imagens foram geradas com sucesso!")

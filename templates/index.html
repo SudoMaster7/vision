@@ -421,7 +421,15 @@
                                     </div>
                                     <div class="col-sm-6 col-lg-12">
                                         <div class="gesture-card">
-                                            <div class="gesture-emoji">😐</div>
+                                            <div class="gesture-emoji">�</div>
+                                            <div class="gesture-name">Olhos Fechados</div>
+                                            <div class="gesture-desc">Feche os dois olhos</div>
+                                            <div class="gesture-img-label">olhos_fechados.jpg</div>
+                                        </div>
+                                    </div>
+                                    <div class="col-sm-6 col-lg-12">
+                                        <div class="gesture-card">
+                                            <div class="gesture-emoji">�😐</div>
                                             <div class="gesture-name">Neutro</div>
                                             <div class="gesture-desc">Expressão neutra / sem expressão</div>
                                             <div class="gesture-img-label">neutro.jpg</div>
@@ -845,7 +853,7 @@
         const gestureEmojis = {
             'OK': '👌', 'LIKE': '👍', 'Paz e Amor': '✌️', 'Rock': '🤘',
             'Apontando': '☝️', 'Mao Aberta': '🖐️', 'Punho Fechado': '✊',
-            'Sorriso': '😀', 'Surpresa': '😮', 'Neutro': '😐'
+            'Sorriso': '😀', 'Surpresa': '😮', 'Olhos Fechados': '😴', 'Neutro': '😐'
         };
 
         let gestureConfigData = null;
@@ -869,7 +877,7 @@
             gestos.forEach(gesto => {
                 const imagemAtual = mapeamento[gesto] || 'neutro.jpg';
                 const emoji = gestureEmojis[gesto] || '❓';
-                const isExpressao = ['Sorriso', 'Surpresa', 'Neutro'].includes(gesto);
+                const isExpressao = ['Sorriso', 'Surpresa', 'Olhos Fechados', 'Neutro'].includes(gesto);
                 const tipo = isExpressao ? '😊 Expressão' : '🖐️ Gesto';
 
                 let optionsHtml = '';
@@ -952,7 +960,7 @@
                     'OK': 'ok.jpg', 'LIKE': 'like.jpg', 'Paz e Amor': 'paz.jpg',
                     'Rock': 'like.jpg', 'Apontando': 'neutro.jpg', 'Mao Aberta': 'sol.jpg',
                     'Punho Fechado': 'lua.jpg', 'Sorriso': 'sorriso.jpg',
-                    'Surpresa': 'surpresa.jpg', 'Neutro': 'neutro.jpg'
+                    'Surpresa': 'surpresa.jpg', 'Olhos Fechados': 'olhos_fechados.jpg', 'Neutro': 'neutro.jpg'
                 }})
             })
                 .then(async r => {

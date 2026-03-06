@@ -126,6 +126,7 @@ MAPEAMENTO_PADRAO = {
     "Punho Fechado": "lua.jpg",
     "Sorriso": "sorriso.jpg",
     "Surpresa": "surpresa.jpg",
+    "Olhos Fechados": "olhos_fechados.jpg",
     "Neutro": "neutro.jpg"
 }
 
@@ -351,6 +352,30 @@ def contar_dedos(landmarks, lateralidade="Right", orientacao="Palma"):
 
     return sum(dedos_levantados), dedos_levantados
 
+def _calcular_ear(p, pontos_olho):
+    """Calcula Eye Aspect Ratio (EAR) para detectar olhos fechados.
+    pontos_olho: lista de 6 índices [p1, p2, p3, p4, p5, p6]
+    p1-p4 = cantos horizontais, p2-p6 e p3-p5 = pares verticais
+    """
+    # Distâncias verticais
+    v1 = ((p[pontos_olho[1]].x - p[pontos_olho[5]].x)**2 +
+          (p[pontos_olho[1]].y - p[pontos_olho[5]].y)**2)**0.5
+    v2 = ((p[pontos_olho[2]].x - p[pontos_olho[4]].x)**2 +
+          (p[pontos_olho[2]].y - p[pontos_olho[4]].y)**2)**0.5
+    # Distância horizontal
+    h = ((p[pontos_olho[0]].x - p[pontos_olho[3]].x)**2 +
+         (p[pontos_olho[0]].y - p[pontos_olho[3]].y)**2)**0.5
+    if h == 0:
+        return 0.3  # valor neutro para evitar divisão por zero
+    return (v1 + v2) / (2.0 * h)
+
+# Landmarks do Face Mesh para os olhos (índices MediaPipe 468+)
+# Olho direito: [33, 160, 158, 133, 153, 144]
+# Olho esquerdo: [362, 385, 387, 263, 373, 380]
+_OLHO_DIREITO = [33, 160, 158, 133, 153, 144]
+_OLHO_ESQUERDO = [362, 385, 387, 263, 373, 380]
+_EAR_LIMIAR = 0.18  # abaixo deste valor, olhos estão fechados
+
 def detectar_expressao(face_landmarks):
     # Pontos chave do rosto (MediaPipe Face Mesh)
     # Lábio superior: 13, Lábio inferior: 14
@@ -372,8 +397,15 @@ def detectar_expressao(face_landmarks):
     # 2. Largura da boca (Sorriso) - Normalizado pela largura do rosto
     largura_boca = (p[291].x - p[61].x) / largura_rosto
     
+    # 3. Detecção de olhos fechados via EAR (Eye Aspect Ratio)
+    ear_direito = _calcular_ear(p, _OLHO_DIREITO)
+    ear_esquerdo = _calcular_ear(p, _OLHO_ESQUERDO)
+    ear_medio = (ear_direito + ear_esquerdo) / 2.0
+    
     if abertura_boca > 0.15: 
         return "Surpresa", mapeamento_gestos.get("Surpresa", "surpresa.jpg")
+    elif ear_medio < _EAR_LIMIAR:
+        return "Olhos Fechados", mapeamento_gestos.get("Olhos Fechados", "olhos_fechados.jpg")
     elif largura_boca > 0.40: # Ajustado: > 40% da largura do rosto
         return "Sorriso", mapeamento_gestos.get("Sorriso", "sorriso.jpg")
     
