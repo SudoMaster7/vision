@@ -32,6 +32,7 @@ CV_AVAILABLE = cv2 is not None and mp is not None and np is not None
 camera_lock = threading.Lock()
 estado_lock = threading.Lock()
 pintura_lock = threading.Lock()
+musica_lock = threading.Lock()
 
 # --- Cache de listagem de câmeras ---
 _cameras_cache = []
@@ -100,6 +101,30 @@ def _inicializar_maos_pintura():
 
 maos_pintura = _inicializar_maos_pintura()
 
+# Instância separada do MediaPipe para Música Virtual (thread safety)
+def _inicializar_maos_musica():
+    if not CV_AVAILABLE or CLOUD_MODE or mp_maos is None:
+        return None, None
+    try:
+        m = mp_maos.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            model_complexity=0,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        r = mp_rosto.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        ) if mp_rosto is not None else None
+        return m, r
+    except Exception:
+        return None, None
+
+maos_musica, rosto_musica = _inicializar_maos_musica()
+
 # Estado Global
 estado_atual = {
     "gesto": "Nenhum",
@@ -111,6 +136,28 @@ estado_atual = {
 config_dispositivos = {
     "camera_index": 0,
     "microfone_index": None
+}
+
+estado_musica = {
+    "gesto_direita": "Nenhum",
+    "gesto_esquerda": "Nenhum",
+    "pos_direita": {"x": 0.5, "y": 0.5},
+    "pos_esquerda": {"x": 0.5, "y": 0.5},
+    "expressao": "Neutro",
+    "dedos_direita": 0,
+    "dedos_esquerda": 0,
+    "gesto_combinado": "Nenhum",
+    "movimento_direita": "Parado",
+    "movimento_esquerda": "Parado",
+    "velocidade_direita": 0.0,
+    "velocidade_esquerda": 0.0
+}
+
+# Histórico de posições para detecção de movimento (últimas N posições do pulso)
+_HIST_MAX = 8
+_historico_pos = {
+    "Right": [],   # lista de (x, y, timestamp)
+    "Left": []
 }
 
 # --- Mapeamento Gesto → Imagem (configurável) ---
@@ -798,6 +845,365 @@ def gerar_frames_pintura():
 @app.route('/pintura')
 def pintura():
     return render_template('pintura.html')
+
+# --- Lógica de Música Virtual ---
+
+def _classificar_gesto_musica(hand_landmarks, lateralidade):
+    """Classifica gesto para a página de música. Retorna (gesto, prioridade, dados_extra)."""
+    # Orientação
+    p0 = hand_landmarks.landmark[0]
+    p5 = hand_landmarks.landmark[5]
+    p17 = hand_landmarks.landmark[17]
+    val_cross = (p5.x - p0.x) * (p17.y - p0.y) - (p5.y - p0.y) * (p17.x - p0.x)
+    if lateralidade == "Right":
+        orientacao = "Palma" if val_cross > 0 else "Costas"
+    else:
+        orientacao = "Palma" if val_cross < 0 else "Costas"
+
+    total_dedos, lista_dedos = contar_dedos(hand_landmarks.landmark, lateralidade, orientacao)
+
+    escala_mao = ((hand_landmarks.landmark[0].y - hand_landmarks.landmark[9].y)**2 +
+                  (hand_landmarks.landmark[0].x - hand_landmarks.landmark[9].x)**2)**0.5
+    x4, y4 = hand_landmarks.landmark[4].x, hand_landmarks.landmark[4].y
+    x8, y8 = hand_landmarks.landmark[8].x, hand_landmarks.landmark[8].y
+    distancia_ok = ((x4 - x8)**2 + (y4 - y8)**2)**0.5
+
+    margem_polegar = 0.04
+    polegar_pra_cima = (hand_landmarks.landmark[4].y < hand_landmarks.landmark[3].y - margem_polegar
+                        and hand_landmarks.landmark[4].y < hand_landmarks.landmark[2].y - margem_polegar)
+
+    indicador_fechado = hand_landmarks.landmark[8].y > hand_landmarks.landmark[6].y
+    medio_fechado = hand_landmarks.landmark[12].y > hand_landmarks.landmark[10].y
+    anelar_fechado = hand_landmarks.landmark[16].y > hand_landmarks.landmark[14].y
+    minimo_fechado = hand_landmarks.landmark[20].y > hand_landmarks.landmark[18].y
+    outros_dedos_fechados = indicador_fechado and medio_fechado and anelar_fechado and minimo_fechado
+
+    indicador_levantado = lista_dedos[1] == 1
+    medio_levantado = lista_dedos[2] == 1
+    anelar_levantado = lista_dedos[3] == 1 if len(lista_dedos) > 3 else False
+    minimo_levantado = lista_dedos[4] == 1 if len(lista_dedos) > 4 else False
+    polegar_levantado = lista_dedos[0] == 1
+
+    # Dados extras (orientação, ângulo do pulso etc.)
+    dados = {"orientacao": orientacao, "dedos": total_dedos, "lista_dedos": lista_dedos}
+
+    # --- Gestos de alta prioridade (comandos) ---
+    if distancia_ok < (0.18 * escala_mao) and (lista_dedos[2] == 1 or lista_dedos[3] == 1):
+        return "OK", 7, dados
+
+    if polegar_pra_cima and outros_dedos_fechados:
+        return "LIKE", 6, dados
+
+    # --- Gesto "Hang Loose" / "Telefone" (polegar + mindinho, outros fechados) ---
+    if polegar_levantado and minimo_levantado and indicador_fechado and medio_fechado and anelar_fechado:
+        return "Hang Loose", 5, dados
+
+    # --- Rock: indicador + mindinho ---
+    if indicador_levantado and minimo_levantado and not medio_levantado and not anelar_levantado:
+        return "Rock", 5, dados
+
+    # --- Paz e Amor: indicador + médio ---
+    if total_dedos == 2 and indicador_levantado and medio_levantado and not anelar_levantado and not minimo_levantado:
+        return "Paz e Amor", 4, dados
+
+    # --- Três dedos: indicador + médio + anelar ---
+    if indicador_levantado and medio_levantado and anelar_levantado and not minimo_levantado and not polegar_levantado:
+        return "Tres Dedos", 4, dados
+
+    # --- Quatro dedos: indicador + médio + anelar + mindinho (sem polegar) ---
+    if indicador_levantado and medio_levantado and anelar_levantado and minimo_levantado and not polegar_levantado:
+        return "Quatro Dedos", 3, dados
+
+    # --- Números explícitos (1-5) baseados em contagem de dedos ---
+    if total_dedos == 1 and indicador_levantado:
+        return "Num1", 3, dados
+
+    if total_dedos == 2 and indicador_levantado and medio_levantado:
+        return "Paz e Amor", 4, dados  # já coberto acima
+
+    if total_dedos == 3:
+        return "Num3", 3, dados
+
+    if total_dedos == 4:
+        return "Num4", 3, dados
+
+    if total_dedos == 5:
+        return "Num5", 3, dados
+
+    # --- Mão aberta = 5 (coberto por Num5) ---
+
+    # --- Punho Fechado ---
+    if outros_dedos_fechados and not polegar_pra_cima:
+        return "Punho Fechado", 1, dados
+
+    return "Nenhum", 0, dados
+
+
+def _detectar_movimento(lateralidade, x, y):
+    """Detecta direção e velocidade do movimento baseado no histórico de posições."""
+    global _historico_pos
+    agora = time.time()
+    hist = _historico_pos.get(lateralidade, [])
+    hist.append((x, y, agora))
+
+    # Manter apenas os últimos N pontos
+    if len(hist) > _HIST_MAX:
+        hist = hist[-_HIST_MAX:]
+    _historico_pos[lateralidade] = hist
+
+    if len(hist) < 3:
+        return "Parado", 0.0
+
+    # Calcular deslocamento e velocidade entre o ponto mais antigo e o mais recente
+    x0, y0, t0 = hist[0]
+    x1, y1, t1 = hist[-1]
+    dt = t1 - t0
+    if dt < 0.05:
+        return "Parado", 0.0
+
+    dx = x1 - x0
+    dy = y1 - y0
+    dist = (dx**2 + dy**2)**0.5
+    velocidade = dist / dt
+
+    # Limiar mínimo de movimento (normalizado 0-1)
+    if dist < 0.06:
+        return "Parado", round(velocidade, 3)
+
+    # Determinar direção dominante
+    if abs(dx) > abs(dy):
+        direcao = "Direita" if dx > 0 else "Esquerda"
+    else:
+        direcao = "Baixo" if dy > 0 else "Cima"
+
+    # Movimento circular (variância alta em ambos eixos)
+    if dist > 0.1 and abs(dx) > 0.04 and abs(dy) > 0.04:
+        # Verificar se é circular: pontos intermediários devem variar em ambos eixos
+        xs = [p[0] for p in hist]
+        ys = [p[1] for p in hist]
+        var_x = max(xs) - min(xs)
+        var_y = max(ys) - min(ys)
+        if var_x > 0.08 and var_y > 0.08 and abs(var_x - var_y) < 0.15:
+            direcao = "Circular"
+
+    # Movimento rápido (swing/shake)
+    if velocidade > 1.5:
+        direcao = "Rapido " + direcao
+
+    return direcao, round(velocidade, 3)
+
+
+def _classificar_gesto_combinado(gesto_dir, gesto_esq, mov_dir, mov_esq, vel_dir, vel_esq, dedos_dir, dedos_esq):
+    """Detecta gestos combinados de duas mãos."""
+    # Ambas mãos com Punho Fechado = "Double Kick"
+    if gesto_dir == "Punho Fechado" and gesto_esq == "Punho Fechado":
+        return "Double Kick"
+
+    # Ambas mãos abertas (5+5) = "Palmas" (clap)
+    if gesto_dir == "Num5" and gesto_esq == "Num5":
+        return "Palmas"
+
+    # Rock em ambas = "Double Rock"
+    if gesto_dir == "Rock" and gesto_esq == "Rock":
+        return "Double Rock"
+
+    # Ambas mãos com Paz e Amor = "Double Peace"
+    if gesto_dir == "Paz e Amor" and gesto_esq == "Paz e Amor":
+        return "Double Peace"
+
+    # Uma mão Punho + outra Mão Aberta = "Punch Clap"
+    if (gesto_dir == "Punho Fechado" and gesto_esq == "Num5") or \
+       (gesto_dir == "Num5" and gesto_esq == "Punho Fechado"):
+        return "Punch Clap"
+
+    # Ambos apontando = "DJ Mode"
+    if gesto_dir == "Num1" and gesto_esq == "Num1":
+        return "DJ Mode"
+
+    # Ambas mãos se movendo rápido = "Shake"
+    if vel_dir > 1.2 and vel_esq > 1.2:
+        return "Shake"
+
+    # Mãos se movendo em direções opostas horizontalmente = "Scratch"
+    if ("Esquerda" in mov_dir and "Direita" in mov_esq) or \
+       ("Direita" in mov_dir and "Esquerda" in mov_esq):
+        if vel_dir > 0.5 and vel_esq > 0.5:
+            return "Scratch"
+
+    # Ambas para cima = "Rise"
+    if "Cima" in mov_dir and "Cima" in mov_esq and vel_dir > 0.4 and vel_esq > 0.4:
+        return "Rise"
+
+    # Ambas para baixo = "Drop"
+    if "Baixo" in mov_dir and "Baixo" in mov_esq and vel_dir > 0.4 and vel_esq > 0.4:
+        return "Drop"
+
+    # Circular em qualquer mão = "Spin"
+    if "Circular" in mov_dir or "Circular" in mov_esq:
+        return "Spin"
+
+    # Hang Loose em ambas = "Aloha"
+    if gesto_dir == "Hang Loose" and gesto_esq == "Hang Loose":
+        return "Aloha"
+
+    # Soma de dedos como controle
+    total = dedos_dir + dedos_esq
+    if total >= 8 and gesto_dir not in ("OK", "LIKE", "Rock", "Hang Loose") and \
+       gesto_esq not in ("OK", "LIKE", "Rock", "Hang Loose"):
+        return f"Total {total}"
+
+    return "Nenhum"
+
+def gerar_frames_musica():
+    """Gera frames MJPEG para a página de música com detecção de gestos e posição."""
+    global cap, estado_musica
+
+    mp_m = maos_musica if maos_musica is not None else maos
+    mp_r = rosto_musica if rosto_musica is not None else rosto
+
+    while True:
+        with camera_lock:
+            cam_ok = cap is not None and cap.isOpened()
+
+        if not cam_ok:
+            if not abrir_camera(config_dispositivos["camera_index"], fallback=True):
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "CAMERA NAO ENCONTRADA", (50, 240),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                ret, buffer = cv2.imencode('.jpg', frame)
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                time.sleep(1)
+                continue
+            time.sleep(0.5)
+            continue
+
+        with camera_lock:
+            if cap is not None:
+                sucesso, frame = cap.read()
+            else:
+                sucesso, frame = False, None
+
+        if not sucesso:
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(frame, "ERRO NA CAMERA", (150, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            with camera_lock:
+                if cap is not None:
+                    cap.release()
+                    cap = None
+            ret, buffer = cv2.imencode('.jpg', frame)
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(1)
+            continue
+
+        frame = cv2.flip(frame, 1)
+        frame_small = cv2.resize(frame, (320, 240))
+        frame_rgb = cv2.cvtColor(frame_small, cv2.COLOR_BGR2RGB)
+
+        resultados_maos = mp_m.process(frame_rgb)
+        resultados_rosto = mp_r.process(frame_rgb) if mp_r is not None else None
+
+        gesto_dir = "Nenhum"
+        gesto_esq = "Nenhum"
+        pos_dir = {"x": 0.5, "y": 0.5}
+        pos_esq = {"x": 0.5, "y": 0.5}
+        dedos_dir = 0
+        dedos_esq = 0
+        expressao = "Neutro"
+        mov_dir = "Parado"
+        mov_esq = "Parado"
+        vel_dir = 0.0
+        vel_esq = 0.0
+
+        if resultados_maos.multi_hand_landmarks:
+            for idx, hand_landmarks in enumerate(resultados_maos.multi_hand_landmarks):
+                # Desenhar landmarks
+                mp_desenho.draw_landmarks(frame, hand_landmarks, mp_maos.HAND_CONNECTIONS)
+
+                lateralidade = "Right"
+                if resultados_maos.multi_handedness and idx < len(resultados_maos.multi_handedness):
+                    lateralidade = resultados_maos.multi_handedness[idx].classification[0].label
+
+                gesto, _, dados = _classificar_gesto_musica(hand_landmarks, lateralidade)
+                total = dados.get("dedos", 0)
+
+                wrist = hand_landmarks.landmark[0]
+                pos = {"x": round(wrist.x, 3), "y": round(wrist.y, 3)}
+
+                # Detectar movimento
+                mov, vel = _detectar_movimento(lateralidade, wrist.x, wrist.y)
+
+                if lateralidade == "Right":
+                    gesto_dir = gesto
+                    pos_dir = pos
+                    dedos_dir = total
+                    mov_dir = mov
+                    vel_dir = vel
+                else:
+                    gesto_esq = gesto
+                    pos_esq = pos
+                    dedos_esq = total
+                    mov_esq = mov
+                    vel_esq = vel
+
+        # Classificar gesto combinado de duas mãos
+        gesto_combinado = _classificar_gesto_combinado(
+            gesto_dir, gesto_esq, mov_dir, mov_esq, vel_dir, vel_esq, dedos_dir, dedos_esq
+        )
+
+        if resultados_rosto and resultados_rosto.multi_face_landmarks:
+            for face_landmarks in resultados_rosto.multi_face_landmarks:
+                exp, _ = detectar_expressao(face_landmarks)
+                expressao = exp
+
+        # Overlay de info no frame
+        h, w = frame.shape[:2]
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, 52), (0, 0, 0), -1)
+        frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+        info1 = f"D: {gesto_dir} | E: {gesto_esq} | {expressao}"
+        info2 = f"Mov D: {mov_dir} | Mov E: {mov_esq}"
+        if gesto_combinado != "Nenhum":
+            info2 += f" | Combo: {gesto_combinado}"
+        cv2.putText(frame, info1, (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 200), 1)
+        cv2.putText(frame, info2, (10, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
+
+        with musica_lock:
+            estado_musica["gesto_direita"] = gesto_dir
+            estado_musica["gesto_esquerda"] = gesto_esq
+            estado_musica["pos_direita"] = pos_dir
+            estado_musica["pos_esquerda"] = pos_esq
+            estado_musica["expressao"] = expressao
+            estado_musica["dedos_direita"] = dedos_dir
+            estado_musica["dedos_esquerda"] = dedos_esq
+            estado_musica["gesto_combinado"] = gesto_combinado
+            estado_musica["movimento_direita"] = mov_dir
+            estado_musica["movimento_esquerda"] = mov_esq
+            estado_musica["velocidade_direita"] = vel_dir
+            estado_musica["velocidade_esquerda"] = vel_esq
+
+        ret, buffer = cv2.imencode('.jpg', frame)
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        time.sleep(0.033)
+
+@app.route('/musica')
+def musica():
+    return render_template('musica.html')
+
+@app.route('/video_feed_musica')
+def video_feed_musica():
+    if CLOUD_MODE or not CV_AVAILABLE:
+        return redirect(url_for('static', filename='images/neutro.jpg'))
+    return Response(gerar_frames_musica(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/musica_status')
+def musica_status():
+    with musica_lock:
+        data = dict(estado_musica)
+    return jsonify(data)
 
 @app.route('/video_feed_pintura')
 def video_feed_pintura():

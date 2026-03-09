@@ -26,6 +26,26 @@ Utilizando a malha facial (Face Mesh), o sistema detecta:
 *   Painel de status dinâmico que mostra os gestos detectados por cada mão (Esquerda/Direita).
 *   Atualização automática da imagem de resposta sem recarregar a página.
 
+### 🎥 Música Virtual
+Página interativa onde os gestos controlam instrumentos musicais em tempo real:
+*   **5 Estilos Musicais:** Rock, Jazz, Eletrônica, Samba e Bossa Nova.
+*   **Percussão sintetizada** via Web Audio API (bumbo, caixa, hi-hat, crash).
+*   **Loops de melodia e baixo** — samples por estilo com fallback sintetizado.
+*   **Mapeamento de gestos:**
+    *   ✊ Punho Fechado → Bumbo
+    *   🖐️ Mão Aberta → Caixa
+    *   ✌️ Paz e Amor → Hi-Hat
+    *   🤘 Rock → Crash + Melodia
+    *   👌 OK → Play/Pause
+    *   👍 Like → Próximo estilo
+    *   ☝️ Apontar (esquerda) → Liga/desliga baixo
+*   **Expressões faciais:**
+    *   😄 Sorriso → Aumenta BPM
+    *   😮 Surpresa → Efeito reverb
+    *   😴 Olhos Fechados → Diminui BPM
+*   **Posição das mãos:** Mão direita (vertical) controla volume, mão esquerda (horizontal) controla pan estéreo.
+*   **Visualização animada:** Partículas, ondas de frequência e gradientes que reagem à música.
+
 ## 🛠️ Tecnologias Utilizadas
 
 *   **Python 3.11**
@@ -33,6 +53,7 @@ Utilizando a malha facial (Face Mesh), o sistema detecta:
 *   **MediaPipe:** Modelos de IA para detecção de mãos e face mesh.
 *   **Flask:** Servidor web.
 *   **NumPy:** Operações matemáticas.
+*   **Web Audio API:** Síntese de percussão e reprodução de samples no navegador.
 
 ## 📦 Instalação e Execução
 
@@ -72,6 +93,8 @@ Utilizando a malha facial (Face Mesh), o sistema detecta:
     ```bash
     python app_web.py
     ```
+
+    cd "/home/sudobrito/Área de trabalho/vision/vision" && source .venv/bin/activate && python app_web.py
 
 6.  **Acesse no navegador:**
     Abra `http://127.0.0.1:5000` no seu navegador web.
@@ -133,9 +156,15 @@ C:/venvs/visionsudo311/Scripts/python.exe app_web.py
 ## 📂 Estrutura do Projeto
 
 *   `app_web.py`: Código principal da aplicação Flask e lógica de visão computacional.
-*   `templates/index.html`: Interface do usuário (HTML/JS).
+*   `templates/index.html`: Interface do usuário — painel de gestos (HTML/JS).
+*   `templates/pintura.html`: Página de pintura virtual.
+*   `templates/musica.html`: Página de música virtual.
 *   `static/images/`: Imagens geradas para feedback visual.
+*   `static/js/musica_engine.js`: Motor de áudio (Web Audio API + samples).
+*   `static/js/musica_visual.js`: Animações e visualização de áudio.
+*   `static/audio/`: Samples de áudio por estilo musical.
 *   `gerar_novas_imagens.py`: Script utilitário para criar as imagens de resposta.
+*   `gerar_samples_musica.py`: Script para gerar samples de áudio placeholder.
 
 ## 📝 Notas de Desenvolvimento
 

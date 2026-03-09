@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisionSudo - Música Virtual</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(145deg, #020617, #0f172a);
+            min-height: 100vh;
+            color: #e2e8f0;
+            overflow-x: hidden;
+        }
+
+        .topbar {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+        }
+
+        .panel {
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 16px;
+            background: rgba(15, 23, 42, 0.8);
+            overflow: hidden;
+        }
+
+        .panel-title {
+            background: rgba(30, 41, 59, 0.85);
+            border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+            padding: .75rem 1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+        }
+
+        .video-wrap {
+            background: #020617;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 360px;
+        }
+
+        .video-wrap img {
+            width: 100%;
+            height: 360px;
+            object-fit: contain;
+            display: block;
+        }
+
+        #visualCanvas {
+            width: 100%;
+            display: block;
+            border-radius: 0 0 16px 16px;
+        }
+
+        /* Estilo selector */
+        .estilo-btn {
+            border: 2px solid rgba(148, 163, 184, 0.3);
+            border-radius: 12px;
+            padding: 8px 16px;
+            background: rgba(30, 41, 59, 0.6);
+            color: #e2e8f0;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .estilo-btn:hover {
+            border-color: rgba(148, 163, 184, 0.6);
+            background: rgba(30, 41, 59, 0.9);
+        }
+
+        .estilo-btn.active {
+            border-color: var(--accent, #00ffcc);
+            background: rgba(0, 255, 204, 0.12);
+            color: var(--accent, #00ffcc);
+            box-shadow: 0 0 12px rgba(0, 255, 204, 0.2);
+        }
+
+        .estilo-btn .icon {
+            font-size: 1.2rem;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        /* Status grid */
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+            padding: 12px;
+        }
+
+        .status-item {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.15);
+            border-radius: 10px;
+            padding: 8px 12px;
+            text-align: center;
+        }
+
+        .status-item .label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: #94a3b8;
+            letter-spacing: 0.05em;
+        }
+
+        .status-item .value {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin-top: 2px;
+        }
+
+        /* Gesture guide */
+        .guide-table td {
+            padding: 6px 10px;
+            border-color: rgba(148, 163, 184, 0.15);
+            font-size: 0.82rem;
+        }
+
+        .guide-table th {
+            border-color: rgba(148, 163, 184, 0.2);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            color: #94a3b8;
+        }
+
+        .bpm-slider {
+            width: 100%;
+            accent-color: var(--accent, #00ffcc);
+        }
+
+        .badge-live {
+            background: #22c55e;
+            animation: pulse-badge 2s infinite;
+        }
+
+        @keyframes pulse-badge {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .action-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: rgba(0, 255, 204, 0.15);
+            color: var(--accent, #00ffcc);
+            margin: 1px;
+            transition: all 0.3s;
+        }
+
+        .action-badge.active {
+            background: var(--accent, #00ffcc);
+            color: #020617;
+        }
+
+        .controls-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            flex-wrap: wrap;
+        }
+
+        .ctrl-btn {
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            border-radius: 8px;
+            padding: 5px 14px;
+            background: rgba(30, 41, 59, 0.6);
+            color: #e2e8f0;
+            cursor: pointer;
+            font-size: 0.82rem;
+            transition: all 0.2s;
+        }
+
+        .ctrl-btn:hover {
+            background: rgba(148, 163, 184, 0.2);
+        }
+
+        .ctrl-btn.active {
+            background: var(--accent, #00ffcc);
+            color: #020617;
+            border-color: var(--accent, #00ffcc);
+        }
+
+        /* Piano keyboard */
+        .piano-container {
+            padding: 12px;
+            overflow-x: auto;
+        }
+
+        .piano-keys {
+            display: flex;
+            position: relative;
+            height: 140px;
+            min-width: 500px;
+            margin: 0 auto;
+            max-width: 600px;
+        }
+
+        .piano-key {
+            position: relative;
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            border-radius: 0 0 6px 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding-bottom: 6px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            transition: background 0.08s, box-shadow 0.08s;
+            user-select: none;
+        }
+
+        .piano-key.white {
+            flex: 1;
+            height: 100%;
+            background: linear-gradient(180deg, #f8fafc, #e2e8f0);
+            color: #334155;
+            z-index: 1;
+        }
+
+        .piano-key.black {
+            position: absolute;
+            width: 7%;
+            height: 60%;
+            background: linear-gradient(180deg, #1e293b, #0f172a);
+            color: #94a3b8;
+            z-index: 2;
+            border-color: #475569;
+        }
+
+        .piano-key.white:hover { background: linear-gradient(180deg, #e0f2fe, #bae6fd); }
+        .piano-key.black:hover { background: linear-gradient(180deg, #334155, #1e293b); }
+
+        .piano-key.white.pressed {
+            background: var(--accent, #00ffcc) !important;
+            color: #020617;
+            box-shadow: 0 0 15px var(--accent, #00ffcc);
+        }
+
+        .piano-key.black.pressed {
+            background: var(--accent, #00ffcc) !important;
+            color: #020617;
+            box-shadow: 0 0 12px var(--accent, #00ffcc);
+        }
+
+        .piano-key .note-letter {
+            display: block;
+            font-size: 0.7rem;
+            opacity: 0.7;
+        }
+
+        .piano-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            font-size: 0.82rem;
+            color: #94a3b8;
+        }
+
+        @media (max-width: 992px) {
+            .video-wrap, .video-wrap img {
+                min-height: 280px;
+                height: 280px;
+            }
+            .piano-keys { min-width: 400px; height: 110px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar topbar mb-3">
+        <div class="container">
+            <a class="navbar-brand text-light" href="/">🖐️ VisionSudo</a>
+            <div class="d-flex gap-2">
+                <a href="/" class="btn btn-outline-light btn-sm">🏠 Gestos</a>
+                <a href="/pintura" class="btn btn-outline-light btn-sm">🎨 Pintura</a>
+                <a href="/musica" class="btn btn-outline-info btn-sm active">🎵 Música</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Seletor de estilo -->
+        <div class="text-center mb-3">
+            <h2 class="mb-2">🎵 Música Virtual</h2>
+            <p class="text-secondary mb-3" style="font-size: 0.9rem;">Toque instrumentos com gestos das mãos e expressões faciais</p>
+            <div class="d-flex justify-content-center flex-wrap gap-2" id="estiloSelector">
+                <button class="estilo-btn active" data-estilo="rock" style="--accent: #ff3333;">
+                    <span class="icon">🎸</span> Rock
+                </button>
+                <button class="estilo-btn" data-estilo="jazz" style="--accent: #4488ff;">
+                    <span class="icon">🎷</span> Jazz
+                </button>
+                <button class="estilo-btn" data-estilo="eletronica" style="--accent: #00ffcc;">
+                    <span class="icon">🎧</span> Eletrônica
+                </button>
+                <button class="estilo-btn" data-estilo="samba" style="--accent: #44dd44;">
+                    <span class="icon">🥁</span> Samba
+                </button>
+                <button class="estilo-btn" data-estilo="bossanova" style="--accent: #ffaa44;">
+                    <span class="icon">🎶</span> Bossa Nova
+                </button>
+            </div>
+        </div>
+
+        <div class="row g-3">
+            <!-- Coluna esquerda: Webcam + Status -->
+            <div class="col-lg-6">
+                <div class="panel mb-3">
+                    <div class="panel-title">
+                        📹 Câmera <span class="badge badge-live ms-2" style="font-size: .65rem">AO VIVO</span>
+                    </div>
+                    <div class="video-wrap">
+                        <img src="{{ url_for('video_feed_musica') }}" alt="Feed Música" id="videoFeed">
+                    </div>
+                </div>
+
+                <!-- Status -->
+                <div class="panel">
+                    <div class="panel-title">📊 Status</div>
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <div class="label">👉 Mão Direita</div>
+                            <div class="value" id="statusDir">Nenhum</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="label">👈 Mão Esquerda</div>
+                            <div class="value" id="statusEsq">Nenhum</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="label">🤝 Combo</div>
+                            <div class="value" id="statusCombo">—</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="label">↗️ Movimento</div>
+                            <div class="value" id="statusMovimento">—</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="label">😀 Expressão</div>
+                            <div class="value" id="statusExp">Neutro</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="label">🎵 BPM</div>
+                            <div class="value" id="statusBPM">120</div>
+                        </div>
+                    </div>
+                    <!-- Ações ativas -->
+                    <div class="px-3 pb-2">
+                        <div class="label mb-1" style="font-size: .7rem; color: #94a3b8;">ÚLTIMA AÇÃO</div>
+                        <div id="lastAction" style="min-height: 24px;">
+                            <span class="action-badge">aguardando gesto...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Coluna direita: Visualização + Controles -->
+            <div class="col-lg-6">
+                <div class="panel mb-3">
+                    <div class="panel-title">🌊 Visualização</div>
+                    <canvas id="visualCanvas"></canvas>
+                </div>
+
+                <!-- Controles manuais -->
+                <div class="panel">
+                    <div class="panel-title">🎛️ Controles</div>
+                    <div class="controls-row">
+                        <button class="ctrl-btn" id="btnPlayPause" onclick="manualTogglePlay()">▶ Play</button>
+                        <button class="ctrl-btn" id="btnBass" onclick="manualToggleBass()">🎸 Baixo</button>
+                        <button class="ctrl-btn" id="btnMelody" onclick="manualToggleMelody()">🎹 Melodia</button>
+                    </div>
+                    <div class="controls-row">
+                        <span style="font-size: .82rem; color: #94a3b8; min-width: 35px;">BPM</span>
+                        <input type="range" class="bpm-slider flex-grow-1" id="bpmSlider" min="60" max="200" value="120" oninput="manualSetBPM(this.value)">
+                        <span id="bpmValue" style="font-size: .82rem; min-width: 30px; text-align: right;">120</span>
+                    </div>
+                    <div class="controls-row">
+                        <span style="font-size: .82rem; color: #94a3b8; min-width: 50px;">Volume</span>
+                        <input type="range" class="bpm-slider flex-grow-1" id="volSlider" min="0" max="100" value="70" oninput="manualSetVolume(this.value)">
+                    </div>
+                </div>
+
+                <!-- Piano Virtual -->
+                <div class="panel mt-3">
+                    <div class="panel-title">🎹 Piano Virtual</div>
+                    <div class="piano-toggle">
+                        <label style="cursor:pointer; display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" id="pianoToggle" checked> Ativar teclado do computador
+                        </label>
+                        <span style="font-size:.72rem; color:#64748b; margin-left:auto;">Use as teclas Z-M (oitava baixa) e Q-I (oitava alta)</span>
+                    </div>
+                    <div class="piano-container" id="pianoContainer">
+                        <div class="piano-keys" id="pianoKeys"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guia de referência (colapsável) -->
+        <div class="row mt-3 mb-4">
+            <div class="col-12">
+                <div class="panel">
+                    <div class="panel-title" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#guideCollapse">
+                        📖 Guia de Gestos Musicais
+                        <span class="ms-auto" style="font-size: .75rem; color: #94a3b8;">▼ clique para expandir</span>
+                    </div>
+                    <div class="collapse" id="guideCollapse">
+                        <div class="p-3">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h6 class="mb-2">🤚 Gestos com Uma Mão → Sons</h6>
+                                    <table class="table table-sm table-dark guide-table">
+                                        <thead><tr><th>Gesto</th><th>Ação</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>✊ Punho Fechado</td><td>Bumbo (Kick)</td></tr>
+                                            <tr><td>🖐️ Mão Aberta (5 dedos)</td><td>Caixa (Snare)</td></tr>
+                                            <tr><td>✌️ Paz e Amor</td><td>Hi-Hat</td></tr>
+                                            <tr><td>🤘 Rock</td><td>Crash + Melodia</td></tr>
+                                            <tr><td>👌 OK</td><td>Play / Pause</td></tr>
+                                            <tr><td>👍 Like</td><td>Próximo estilo</td></tr>
+                                            <tr><td>🤙 Hang Loose</td><td>Liga/desliga melodia</td></tr>
+                                            <tr><td>☝️ Num 1 (indicador)</td><td>Liga/desliga baixo</td></tr>
+                                            <tr><td>🤟 Três Dedos</td><td>Tom</td></tr>
+                                            <tr><td>🖖 Quatro Dedos</td><td>Rimshot</td></tr>
+                                        </tbody>
+                                    </table>
+
+                                    <h6 class="mb-2 mt-3">🤝 Combos (Duas Mãos)</h6>
+                                    <table class="table table-sm table-dark guide-table">
+                                        <thead><tr><th>Combo</th><th>Ação</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>✊+✊ Double Kick</td><td>Bumbo duplo</td></tr>
+                                            <tr><td>🖐️+🖐️ Palmas</td><td>Clap</td></tr>
+                                            <tr><td>🤘+🤘 Double Rock</td><td>Crash + Bass + Melodia</td></tr>
+                                            <tr><td>✌️+✌️ Double Peace</td><td>Hi-Hat duplo</td></tr>
+                                            <tr><td>✊+🖐️ Punch Clap</td><td>Kick + Clap</td></tr>
+                                            <tr><td>👌+✌️ DJ Mode</td><td>Filter Sweep</td></tr>
+                                            <tr><td>🤙+🤙 Aloha</td><td>Shaker</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="mb-2">↗️ Movimentos</h6>
+                                    <table class="table table-sm table-dark guide-table">
+                                        <thead><tr><th>Movimento</th><th>Ação</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>🔄 Mão circular</td><td>Spin (partículas giratórias)</td></tr>
+                                            <tr><td>⬆ Mão p/ cima rápido</td><td>Rise (BPM +5, efeito riser)</td></tr>
+                                            <tr><td>⬇ Mão p/ baixo rápido</td><td>Drop (BPM -5, efeito drop)</td></tr>
+                                            <tr><td>↔ Mão rápido lateral</td><td>Scratch (efeito scratch)</td></tr>
+                                            <tr><td>💨 Mão muito rápido</td><td>Shaker</td></tr>
+                                        </tbody>
+                                    </table>
+
+                                    <h6 class="mb-2 mt-3">😀 Expressões</h6>
+                                    <table class="table table-sm table-dark guide-table">
+                                        <thead><tr><th>Expressão</th><th>Ação</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>😄 Sorriso</td><td>Aumenta BPM (+3)</td></tr>
+                                            <tr><td>😮 Surpresa</td><td>Efeito reverb</td></tr>
+                                            <tr><td>😴 Olhos Fechados</td><td>Diminui BPM (-3)</td></tr>
+                                        </tbody>
+                                    </table>
+
+                                    <h6 class="mb-2 mt-3">🖐️ Posição das Mãos</h6>
+                                    <table class="table table-sm table-dark guide-table">
+                                        <thead><tr><th>Posição</th><th>Controle</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>Mão direita ↕</td><td>Volume (cima = alto)</td></tr>
+                                            <tr><td>Mão esquerda ↔</td><td>Pan estéreo</td></tr>
+                                        </tbody>
+                                    </table>
+
+                                    <h6 class="mb-2 mt-3">🎹 Piano (Teclado do PC)</h6>
+                                    <table class="table table-sm table-dark guide-table">
+                                        <thead><tr><th>Teclas</th><th>Notas</th></tr></thead>
+                                        <tbody>
+                                            <tr><td>Z X C V B N M</td><td>C3 D3 E3 F3 G3 A3 B3</td></tr>
+                                            <tr><td>S D &nbsp; G H J</td><td>C#3 D#3 &nbsp; F#3 G#3 A#3</td></tr>
+                                            <tr><td>Q W E R T Y U I</td><td>C4 D4 E4 F4 G4 A4 B4 C5</td></tr>
+                                            <tr><td>2 3 &nbsp; 5 6 7</td><td>C#4 D#4 &nbsp; F#4 G#4 A#4</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/musica_engine.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/musica_visual.js') }}"></script>
+    <script>
+        // ===================== INSTÂNCIAS =====================
+        let engine = null;
+        let visual = null;
+        let audioIniciado = false;
+        let pollingTimer = null;
+        let currentEstilo = 'rock';
+
+        // Accent colors por estilo
+        const estiloAccents = {
+            rock: '#ff3333',
+            jazz: '#4488ff',
+            eletronica: '#00ffcc',
+            samba: '#44dd44',
+            bossanova: '#ffaa44'
+        };
+
+        // ===================== INICIALIZAÇÃO =====================
+        async function initAudio() {
+            if (audioIniciado) return;
+            engine = new MusicaEngine();
+            await engine.init();
+            visual = new MusicaVisual('visualCanvas');
+            visual.setEngine(engine);
+            visual.setEstilo(currentEstilo);
+            visual.start();
+            audioIniciado = true;
+            startPolling();
+        }
+
+        // O áudio precisa ser iniciado após interação do usuário
+        document.addEventListener('click', function iniciar() {
+            initAudio();
+            document.removeEventListener('click', iniciar);
+        }, { once: false });
+
+        document.addEventListener('keydown', function iniciar() {
+            initAudio();
+            document.removeEventListener('keydown', iniciar);
+        }, { once: false });
+
+        // ===================== SELETOR DE ESTILO =====================
+        document.querySelectorAll('.estilo-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const estilo = btn.dataset.estilo;
+                currentEstilo = estilo;
+
+                // UI
+                document.querySelectorAll('.estilo-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Atualizar accent color global
+                document.documentElement.style.setProperty('--accent', estiloAccents[estilo]);
+
+                // Engine
+                if (engine) engine.setEstilo(estilo);
+                if (visual) visual.setEstilo(estilo);
+            });
+        });
+
+        // ===================== POLLING =====================
+        function startPolling() {
+            if (pollingTimer) return;
+            pollingTimer = setInterval(fetchMusicStatus, 200);
+        }
+
+        async function fetchMusicStatus() {
+            if (!engine) return;
+            try {
+                const resp = await fetch('/musica_status');
+                if (!resp.ok) return;
+                const state = await resp.json();
+
+                // Atualizar status na UI
+                document.getElementById('statusDir').textContent = state.gesto_direita || 'Nenhum';
+                document.getElementById('statusEsq').textContent = state.gesto_esquerda || 'Nenhum';
+                document.getElementById('statusExp').textContent = state.expressao || 'Neutro';
+                document.getElementById('statusCombo').textContent = state.gesto_combinado || '—';
+                const movDir = state.movimento_direita || '';
+                const movEsq = state.movimento_esquerda || '';
+                const movTexts = [movDir, movEsq].filter(m => m && m !== 'Parado');
+                document.getElementById('statusMovimento').textContent = movTexts.length > 0 ? movTexts.join(' / ') : '—';
+
+                // Processar gestos no engine
+                engine.resume();
+                const triggered = engine.processGestureState(state);
+
+                // Atualizar BPM display
+                document.getElementById('statusBPM').textContent = engine.bpm;
+                document.getElementById('bpmSlider').value = engine.bpm;
+                document.getElementById('bpmValue').textContent = engine.bpm;
+
+                // Atualizar botões de controle
+                updateCtrlButtons();
+
+                // Feedback visual
+                if (triggered && triggered.length > 0) {
+                    const actionDiv = document.getElementById('lastAction');
+                    actionDiv.innerHTML = triggered.map(t => {
+                        const label = actionLabel(t);
+                        return `<span class="action-badge active">${label}</span>`;
+                    }).join(' ');
+
+                    // Partículas + label
+                    const visualTypes = ['kick','snare','hihat','crash','reverb','double_kick','clap','double_rock','scratch','rise','drop','spin','shaker','tom','rimshot','filter_sweep','piano'];
+                    triggered.forEach(t => {
+                        const vt = visualTypes.find(v => t === v || t.startsWith(v));
+                        if (vt) visual.triggerParticles(vt);
+                        visual.showGestureLabel(actionLabel(t));
+                    });
+
+                    // Check if style changed
+                    if (triggered.some(t => t.startsWith('estilo_'))) {
+                        const newEstilo = triggered.find(t => t.startsWith('estilo_')).replace('estilo_', '');
+                        currentEstilo = newEstilo;
+                        visual.setEstilo(newEstilo);
+                        // Update selector UI
+                        document.querySelectorAll('.estilo-btn').forEach(b => {
+                            b.classList.toggle('active', b.dataset.estilo === newEstilo);
+                        });
+                        document.documentElement.style.setProperty('--accent', estiloAccents[newEstilo]);
+                    }
+                }
+            } catch (e) {
+                // Silenciado — perda de conexão momentânea
+            }
+        }
+
+        function actionLabel(action) {
+            const map = {
+                'kick': '🥁 Bumbo',
+                'snare': '🪘 Caixa',
+                'hihat': '🔔 Hi-Hat',
+                'crash': '💥 Crash',
+                'play': '▶ Play',
+                'pause': '⏸ Pause',
+                'bass_on': '🎸 Baixo ON',
+                'bass_off': '🎸 Baixo OFF',
+                'melody_on': '🎹 Melodia ON',
+                'melody_off': '🎹 Melodia OFF',
+                'bpm_up': '⬆ BPM+',
+                'bpm_down': '⬇ BPM-',
+                'reverb': '🌊 Reverb',
+                'double_kick': '🥁🥁 Bumbo Duplo',
+                'clap': '👏 Clap',
+                'double_rock': '🤘🤘 Double Rock',
+                'tom': '🪘 Tom',
+                'rimshot': '🥢 Rimshot',
+                'shaker': '🎵 Shaker',
+                'scratch': '💿 Scratch',
+                'filter_sweep': '🌊 Filter Sweep',
+                'rise': '⬆ Rise',
+                'drop': '⬇ Drop',
+                'spin': '🔄 Spin',
+                'piano': '🎹 Piano'
+            };
+            if (action.startsWith('estilo_')) {
+                return '🎵 ' + action.replace('estilo_', '').toUpperCase();
+            }
+            if (action.startsWith('piano_')) {
+                return '🎹 ' + action.replace('piano_', '').toUpperCase();
+            }
+            return map[action] || action;
+        }
+
+        function updateCtrlButtons() {
+            if (!engine) return;
+            const playBtn = document.getElementById('btnPlayPause');
+            playBtn.textContent = engine.playing ? '⏸ Pause' : '▶ Play';
+            playBtn.classList.toggle('active', engine.playing);
+
+            document.getElementById('btnBass').classList.toggle('active', engine.bassPlaying);
+            document.getElementById('btnMelody').classList.toggle('active', engine.melodyPlaying);
+        }
+
+        // ===================== CONTROLES MANUAIS =====================
+        async function manualTogglePlay() {
+            await initAudio();
+            engine.togglePlay();
+            updateCtrlButtons();
+        }
+
+        async function manualToggleBass() {
+            await initAudio();
+            engine.toggleBass();
+            updateCtrlButtons();
+        }
+
+        async function manualToggleMelody() {
+            await initAudio();
+            engine.toggleMelody();
+            updateCtrlButtons();
+        }
+
+        function manualSetBPM(val) {
+            if (!engine) return;
+            engine.setBPM(parseInt(val));
+            document.getElementById('bpmValue').textContent = val;
+            document.getElementById('statusBPM').textContent = val;
+        }
+
+        function manualSetVolume(val) {
+            if (!engine) return;
+            engine.masterGain.gain.setTargetAtTime(val / 100, engine.ctx.currentTime, 0.05);
+        }
+
+        // ===================== PIANO VIRTUAL =====================
+        const PIANO_LAYOUT = [
+            // Oitava baixa (C3-B3) teclas brancas: z x c v b n m
+            { note: 'C3', key: 'z', type: 'white' },
+            { note: 'C#3', key: 's', type: 'black', offset: 0 },
+            { note: 'D3', key: 'x', type: 'white' },
+            { note: 'D#3', key: 'd', type: 'black', offset: 1 },
+            { note: 'E3', key: 'c', type: 'white' },
+            { note: 'F3', key: 'v', type: 'white' },
+            { note: 'F#3', key: 'g', type: 'black', offset: 3 },
+            { note: 'G3', key: 'b', type: 'white' },
+            { note: 'G#3', key: 'h', type: 'black', offset: 4 },
+            { note: 'A3', key: 'n', type: 'white' },
+            { note: 'A#3', key: 'j', type: 'black', offset: 5 },
+            { note: 'B3', key: 'm', type: 'white' },
+            // Oitava alta (C4-C5) teclas brancas: q w e r t y u i
+            { note: 'C4', key: 'q', type: 'white' },
+            { note: 'C#4', key: '2', type: 'black', offset: 7 },
+            { note: 'D4', key: 'w', type: 'white' },
+            { note: 'D#4', key: '3', type: 'black', offset: 8 },
+            { note: 'E4', key: 'e', type: 'white' },
+            { note: 'F4', key: 'r', type: 'white' },
+            { note: 'F#4', key: '5', type: 'black', offset: 10 },
+            { note: 'G4', key: 't', type: 'white' },
+            { note: 'G#4', key: '6', type: 'black', offset: 11 },
+            { note: 'A4', key: 'y', type: 'white' },
+            { note: 'A#4', key: '7', type: 'black', offset: 12 },
+            { note: 'B4', key: 'u', type: 'white' },
+            { note: 'C5', key: 'i', type: 'white' }
+        ];
+
+        const pianoKeysPressed = new Set();
+        let pianoEnabled = true;
+
+        function buildPianoUI() {
+            const container = document.getElementById('pianoKeys');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const whites = PIANO_LAYOUT.filter(k => k.type === 'white');
+            const blacks = PIANO_LAYOUT.filter(k => k.type === 'black');
+            const totalWhites = whites.length;
+            const keyWidthPercent = 100 / totalWhites;
+
+            // White keys
+            whites.forEach((k, i) => {
+                const el = document.createElement('div');
+                el.className = 'piano-key white';
+                el.dataset.key = k.key;
+                el.dataset.note = k.note;
+                el.innerHTML = `<span class="note-letter">${k.key.toUpperCase()}</span>`;
+                el.style.width = keyWidthPercent + '%';
+                // Click handlers
+                el.addEventListener('mousedown', () => triggerPianoKey(k.key));
+                el.addEventListener('mouseup', () => releasePianoKey(k.key));
+                el.addEventListener('mouseleave', () => releasePianoKey(k.key));
+                container.appendChild(el);
+            });
+
+            // Black keys (positioned absolutely)
+            blacks.forEach(k => {
+                const el = document.createElement('div');
+                el.className = 'piano-key black';
+                el.dataset.key = k.key;
+                el.dataset.note = k.note;
+                el.innerHTML = `<span class="note-letter">${k.key.toUpperCase()}</span>`;
+                // Position relative to white keys
+                const leftPercent = (k.offset + 0.65) * keyWidthPercent;
+                el.style.left = leftPercent + '%';
+                el.addEventListener('mousedown', (e) => { e.stopPropagation(); triggerPianoKey(k.key); });
+                el.addEventListener('mouseup', () => releasePianoKey(k.key));
+                el.addEventListener('mouseleave', () => releasePianoKey(k.key));
+                container.appendChild(el);
+            });
+        }
+
+        function triggerPianoKey(key) {
+            if (pianoKeysPressed.has(key)) return;
+            pianoKeysPressed.add(key);
+            if (engine) engine.playPianoNote(key);
+            if (visual) {
+                visual.triggerParticles('piano');
+                const info = PIANO_LAYOUT.find(k => k.key === key);
+                if (info) visual.showGestureLabel('🎹 ' + info.note);
+            }
+            // Visual feedback
+            const el = document.querySelector(`.piano-key[data-key="${key}"]`);
+            if (el) el.classList.add('pressed');
+        }
+
+        function releasePianoKey(key) {
+            pianoKeysPressed.delete(key);
+            const el = document.querySelector(`.piano-key[data-key="${key}"]`);
+            if (el) el.classList.remove('pressed');
+        }
+
+        // Keyboard handlers for piano
+        const pianoKeySet = new Set(PIANO_LAYOUT.map(k => k.key));
+
+        document.addEventListener('keydown', (e) => {
+            if (!pianoEnabled) return;
+            if (e.repeat) return;
+            const key = e.key.toLowerCase();
+            if (pianoKeySet.has(key)) {
+                e.preventDefault();
+                initAudio(); // Ensure audio context
+                triggerPianoKey(key);
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (pianoKeySet.has(key)) {
+                releasePianoKey(key);
+            }
+        });
+
+        // Toggle piano
+        document.addEventListener('DOMContentLoaded', () => {
+            buildPianoUI();
+            const toggle = document.getElementById('pianoToggle');
+            if (toggle) {
+                toggle.addEventListener('change', (e) => {
+                    pianoEnabled = e.target.checked;
+                    document.getElementById('pianoContainer').style.opacity = pianoEnabled ? '1' : '0.4';
+                });
+            }
+        });
+    </script>
+</body>
+</html>
